@@ -16,7 +16,7 @@ concurrency:
 jobs:
   windows:
     name: Build Windows installer
-    runs-on: windows-latest
+    runs-on: windows-2022
 
     steps:
       - name: Checkout
@@ -31,7 +31,7 @@ jobs:
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
+          bun-version: 1.2.23
 
       - name: Install app dependencies
         run: npm ci
@@ -92,7 +92,7 @@ jobs:
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
+          bun-version: 1.2.23
 
       - name: Install app dependencies
         run: npm ci
