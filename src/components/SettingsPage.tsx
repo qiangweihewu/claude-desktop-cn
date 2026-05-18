@@ -15,6 +15,7 @@ import {
   Gauge,
   GitBranch,
   Globe2,
+  KeyRound,
   Languages,
   ListChecks,
   LogOut,
@@ -23,6 +24,7 @@ import {
   Palette,
   PlugZap,
   ShieldCheck,
+  ServerCog,
   Smartphone,
   TerminalSquare,
   UserCog,
@@ -819,6 +821,11 @@ const SettingsPage = ({ onClose }: SettingsPageProps) => {
   const [defaultOpenTarget, setDefaultOpenTarget] = useState(localStorage.getItem('default_open_target') || 'vscode');
   const [integratedShell, setIntegratedShell] = useState(localStorage.getItem('integrated_shell') || 'powershell');
   const [permissionMode, setPermissionMode] = useState<PermissionMode>('full_access');
+  const [apiModeRevision, setApiModeRevision] = useState(0);
+  const [customApiBaseUrl, setCustomApiBaseUrl] = useState(localStorage.getItem('CUSTOM_BASE_URL') || '');
+  const [customApiKey, setCustomApiKey] = useState(localStorage.getItem('CUSTOM_API_KEY') || '');
+  const [apiConfigNotice, setApiConfigNotice] = useState('');
+  const [apiConfigError, setApiConfigError] = useState('');
 
   const [profile, setProfile] = useState<any>(null);
   const [usage, setUsage] = useState<any>(null);
@@ -1427,6 +1434,44 @@ const SettingsPage = ({ onClose }: SettingsPageProps) => {
   const openApiSetupPage = () => {
     onClose();
     navigate('/login');
+  };
+
+  const applyApiMode = (nextMode: 'clawparrot' | 'selfhosted') => {
+    const prevMode = localStorage.getItem('user_mode') || 'selfhosted';
+    localStorage.setItem('user_mode', nextMode);
+    if (prevMode !== nextMode) {
+      localStorage.removeItem('chat_models');
+      localStorage.removeItem('default_model');
+      localStorage.removeItem('cross_mode_overrides');
+    }
+    if (nextMode === 'clawparrot') {
+      localStorage.setItem('ANTHROPIC_BASE_URL', 'https://api.anthropic.com');
+    } else {
+      localStorage.removeItem('gateway_user');
+      localStorage.removeItem('gateway_quota');
+    }
+    setApiConfigError('');
+    setApiConfigNotice(nextMode === 'selfhosted' ? '已切换到自定义兼容 API。' : '已切换到官方 Anthropic API。');
+    setApiModeRevision((value) => value + 1);
+  };
+
+  const saveCustomApiConfig = () => {
+    const baseUrl = customApiBaseUrl.trim();
+    const apiKey = customApiKey.trim();
+    if (!baseUrl || !apiKey) {
+      setApiConfigNotice('');
+      setApiConfigError('请填写自定义 API 的 Base URL 和 API Key。');
+      return;
+    }
+    localStorage.setItem('CUSTOM_BASE_URL', baseUrl);
+    localStorage.setItem('CUSTOM_API_KEY', apiKey);
+    localStorage.removeItem('gateway_user');
+    localStorage.removeItem('gateway_quota');
+    localStorage.removeItem('cross_mode_overrides');
+    localStorage.setItem('user_mode', 'selfhosted');
+    setApiConfigError('');
+    setApiConfigNotice('自定义兼容 API 已保存，并已切换到该模式。');
+    setApiModeRevision((value) => value + 1);
   };
 
   const reloadMcpServers = async () => {
@@ -2177,8 +2222,6 @@ const SettingsPage = ({ onClose }: SettingsPageProps) => {
                           localStorage.removeItem('chat_models');
                           localStorage.removeItem('default_model');
                           if (nextMode === 'clawparrot') {
-                            localStorage.removeItem('CUSTOM_API_KEY');
-                            localStorage.removeItem('CUSTOM_BASE_URL');
                             localStorage.setItem('ANTHROPIC_BASE_URL', 'https://api.anthropic.com');
                           } else {
                             localStorage.removeItem('gateway_user');
@@ -3987,70 +4030,144 @@ const SettingsPage = ({ onClose }: SettingsPageProps) => {
         );
       case 'account':
         return (() => {
+          void apiModeRevision;
           const currentMode = (localStorage.getItem('user_mode') || 'selfhosted') === 'selfhosted' ? 'custom' : 'official';
           const anthropicKey = localStorage.getItem('ANTHROPIC_API_KEY') || '';
           const customKey = localStorage.getItem('CUSTOM_API_KEY') || '';
+          const customBaseUrl = localStorage.getItem('CUSTOM_BASE_URL') || '';
           const currentBaseUrl =
             currentMode === 'official'
               ? localStorage.getItem('ANTHROPIC_BASE_URL') || 'https://api.anthropic.com'
-              : localStorage.getItem('CUSTOM_BASE_URL') || '';
+              : customBaseUrl;
           const savedKey = currentMode === 'official' ? anthropicKey : customKey;
           const hasConfiguredKey = Boolean(savedKey);
           const maskedKey = hasConfiguredKey ? `${savedKey.slice(0, 8)}...${savedKey.slice(-4)}` : '未配置';
+          const customConfigured = Boolean(customBaseUrl && customKey);
+          const officialConfigured = Boolean(anthropicKey);
 
           return (
             <div className="space-y-5">
               <SectionCard title="API 配置" subtitle="这里管理官方 Anthropic API 和自定义兼容 API 的连接信息。">
-                <div className="space-y-4 rounded-xl border border-claude-border bg-claude-bg px-4 py-4">
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <div className="mb-1 text-[13px] text-claude-textSecondary">当前模式</div>
-                      <div className="text-[14px] text-claude-text">
-                        {currentMode === 'official' ? '官方 Anthropic API' : '自定义兼容 API'}
+                <div className="space-y-4">
+                  <div className="rounded-xl border border-claude-border bg-claude-bg px-4 py-4">
+                    <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+                      <div>
+                        <div className="text-[14px] font-medium text-claude-text">
+                          当前使用：{currentMode === 'official' ? '官方 Anthropic API' : '自定义兼容 API'}
+                        </div>
+                        <div className="mt-1 break-all text-[12px] text-claude-textSecondary">
+                          {currentBaseUrl || '还没有配置端点'} · {maskedKey}
+                        </div>
                       </div>
-                    </div>
-                    <div>
-                      <div className="mb-1 text-[13px] text-claude-textSecondary">API Key 状态</div>
-                      <div className={`text-[14px] ${hasConfiguredKey ? 'text-[#7BD88F]' : 'text-[#F2C94C]'}`}>
+                      <div className={`rounded-full px-2.5 py-1 text-[11px] ${hasConfiguredKey ? 'bg-[#7BD88F]/10 text-[#7BD88F]' : 'bg-[#F2C94C]/10 text-[#F2C94C]'}`}>
                         {hasConfiguredKey ? '已配置' : '未配置'}
                       </div>
                     </div>
+
+                    {!hasConfiguredKey && (
+                      <div className="rounded-xl border border-[#F2C94C]/25 bg-[#F2C94C]/8 px-4 py-3 text-[13px] leading-6 text-[#F6E3A1]">
+                        {currentMode === 'official'
+                          ? '当前还没有配置官方 API Key。你可以打开 Anthropic Console 创建密钥，或直接切换到自定义兼容 API。'
+                          : '当前还没有配置自定义兼容 API。下面直接填写 Base URL 和 API Key 即可。'}
+                      </div>
+                    )}
                   </div>
 
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <div className="mb-1 text-[13px] text-claude-textSecondary">当前端点</div>
-                      <div className="break-all text-[13px] text-claude-text">{currentBaseUrl || '未配置'}</div>
-                    </div>
-                    <div>
-                      <div className="mb-1 text-[13px] text-claude-textSecondary">已保存的 Key</div>
-                      <div className="break-all text-[13px] text-claude-text">{maskedKey}</div>
-                    </div>
-                  </div>
-
-                  {!hasConfiguredKey && (
-                    <div className="rounded-xl border border-[#F2C94C]/25 bg-[#F2C94C]/8 px-4 py-3 text-[13px] leading-6 text-[#F6E3A1]">
-                      {currentMode === 'official'
-                        ? '当前还没有配置官方 API Key。你可以先打开 Anthropic Console 创建密钥，再回到应用里粘贴保存。'
-                        : '当前还没有配置自定义兼容 API。请先填写你的 Base URL 和 API Key。'}
-                    </div>
-                  )}
-
-                  <div className="flex flex-wrap gap-3">
-                    {currentMode === 'official' ? (
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className={`rounded-xl border px-4 py-4 ${currentMode === 'custom' ? 'border-[#2E7CF6]/45 bg-[#2E7CF6]/10' : 'border-claude-border bg-claude-bg'}`}>
+                      <div className="flex items-start gap-3">
+                        <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-[#2E7CF6]/10 text-[#2E7CF6]">
+                          <ServerCog size={17} />
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <div className="text-[14px] font-medium text-claude-text">自定义兼容 API</div>
+                          <div className="mt-1 text-[12px] leading-5 text-claude-textSecondary">
+                            中转站接口，支持 Claude / Anthropic 和 OpenAI 兼容格式。
+                          </div>
+                          <div className="mt-2 truncate text-[11px] text-claude-textSecondary/70">
+                            {customConfigured ? customBaseUrl : '未配置'}
+                          </div>
+                        </div>
+                      </div>
                       <button
-                        onClick={openAnthropicConsoleKeys}
-                        className="rounded-lg border border-[#2E7CF6]/30 bg-[#2E7CF6]/10 px-3 py-2 text-[13px] text-[#8AB4FF] hover:bg-[#2E7CF6]/15"
+                        onClick={() => applyApiMode('selfhosted')}
+                        disabled={!customConfigured && currentMode !== 'custom'}
+                        className="mt-3 w-full rounded-lg border border-claude-border px-3 py-2 text-[12px] text-claude-text hover:bg-claude-hover disabled:cursor-not-allowed disabled:opacity-45"
                       >
-                        打开 Anthropic Console 密钥页
+                        {currentMode === 'custom' ? '当前模式' : customConfigured ? '切换到自定义 API' : '先填写下方配置'}
                       </button>
-                    ) : null}
-                    <button
-                      onClick={openApiSetupPage}
-                      className="rounded-lg border border-claude-border px-3 py-2 text-[13px] text-claude-text hover:bg-claude-hover"
-                    >
-                      重新配置 API
-                    </button>
+                    </div>
+
+                    <div className={`rounded-xl border px-4 py-4 ${currentMode === 'official' ? 'border-[#D97757]/45 bg-[#D97757]/10' : 'border-claude-border bg-claude-bg'}`}>
+                      <div className="flex items-start gap-3">
+                        <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-[#D97757]/10 text-[#D97757]">
+                          <KeyRound size={17} />
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <div className="text-[14px] font-medium text-claude-text">官方 Anthropic API</div>
+                          <div className="mt-1 text-[12px] leading-5 text-claude-textSecondary">
+                            使用官方 Console 创建的 API Key。
+                          </div>
+                          <div className="mt-2 truncate text-[11px] text-claude-textSecondary/70">
+                            {officialConfigured ? 'https://api.anthropic.com' : '未配置 Key'}
+                          </div>
+                        </div>
+                      </div>
+                      <div className="mt-3 grid grid-cols-2 gap-2">
+                        <button
+                          onClick={() => applyApiMode('clawparrot')}
+                          disabled={!officialConfigured && currentMode !== 'official'}
+                          className="rounded-lg border border-claude-border px-3 py-2 text-[12px] text-claude-text hover:bg-claude-hover disabled:cursor-not-allowed disabled:opacity-45"
+                        >
+                          {currentMode === 'official' ? '当前模式' : officialConfigured ? '切换' : '未配置'}
+                        </button>
+                        <button
+                          onClick={openAnthropicConsoleKeys}
+                          className="rounded-lg border border-[#D97757]/25 px-3 py-2 text-[12px] text-[#D97757] hover:bg-[#D97757]/10"
+                        >
+                          打开密钥页
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="rounded-xl border border-[#2E7CF6]/25 bg-[#2E7CF6]/[0.04] px-4 py-4">
+                    <div className="mb-3 flex items-center justify-between gap-3">
+                      <div>
+                        <div className="text-[14px] font-medium text-claude-text">更换自定义兼容 API</div>
+                        <div className="mt-1 text-[12px] text-claude-textSecondary">保存后会立即切换到自定义兼容 API 模式。</div>
+                      </div>
+                      <button
+                        onClick={openApiSetupPage}
+                        className="rounded-lg border border-claude-border px-3 py-2 text-[12px] text-claude-textSecondary hover:bg-claude-hover hover:text-claude-text"
+                      >
+                        打开完整配置页
+                      </button>
+                    </div>
+                    <div className="grid grid-cols-[1fr_1fr_auto] gap-3">
+                      <input
+                        value={customApiBaseUrl}
+                        onChange={(e) => setCustomApiBaseUrl(e.target.value)}
+                        placeholder="Base URL，例如 https://your-relay.example.com"
+                        spellCheck={false}
+                        className="min-w-0 rounded-xl border border-claude-border bg-claude-bg px-3 py-2.5 text-[13px] text-claude-text outline-none focus:border-[#2E7CF6]/55"
+                      />
+                      <input
+                        value={customApiKey}
+                        onChange={(e) => setCustomApiKey(e.target.value)}
+                        placeholder="API Key"
+                        spellCheck={false}
+                        className="min-w-0 rounded-xl border border-claude-border bg-claude-bg px-3 py-2.5 text-[13px] text-claude-text outline-none focus:border-[#2E7CF6]/55"
+                      />
+                      <button
+                        onClick={saveCustomApiConfig}
+                        className="rounded-xl bg-claude-text px-4 py-2.5 text-[13px] font-medium text-claude-bg hover:opacity-90"
+                      >
+                        保存并切换
+                      </button>
+                    </div>
+                    {apiConfigError && <div className="mt-3 text-[12px] text-[#C6613F]">{apiConfigError}</div>}
+                    {apiConfigNotice && <div className="mt-3 text-[12px] text-[#7BD88F]">{apiConfigNotice}</div>}
                   </div>
                 </div>
               </SectionCard>

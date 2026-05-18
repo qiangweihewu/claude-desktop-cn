@@ -21,6 +21,9 @@ const Onboarding: React.FC<OnboardingProps> = ({ onComplete }) => {
   const [mode, setMode] = useState<ApiMode>(
     localStorage.getItem('user_mode') === 'selfhosted' ? 'selfhosted' : 'official',
   );
+  const [customBaseUrl, setCustomBaseUrl] = useState(localStorage.getItem('CUSTOM_BASE_URL') || '');
+  const [customApiKey, setCustomApiKey] = useState(localStorage.getItem('CUSTOM_API_KEY') || '');
+  const [apiError, setApiError] = useState('');
   const [workspace, setWorkspace] = useState(localStorage.getItem('workspace_path') || '');
 
   useEffect(() => {
@@ -68,6 +71,8 @@ const Onboarding: React.FC<OnboardingProps> = ({ onComplete }) => {
       localStorage.removeItem('CUSTOM_API_KEY');
       localStorage.removeItem('CUSTOM_BASE_URL');
     } else {
+      if (customBaseUrl.trim()) localStorage.setItem('CUSTOM_BASE_URL', customBaseUrl.trim());
+      if (customApiKey.trim()) localStorage.setItem('CUSTOM_API_KEY', customApiKey.trim());
       localStorage.removeItem('gateway_user');
       localStorage.removeItem('gateway_quota');
     }
@@ -84,7 +89,19 @@ const Onboarding: React.FC<OnboardingProps> = ({ onComplete }) => {
     onComplete();
   };
 
-  const canContinue = step === 2 ? true : true;
+  const hasPartialCustomApi = mode === 'selfhosted'
+    && Boolean(customBaseUrl.trim() || customApiKey.trim())
+    && !(customBaseUrl.trim() && customApiKey.trim());
+  const canContinue = step !== 1 || mode === 'official' || !hasPartialCustomApi;
+
+  const handleNext = () => {
+    if (hasPartialCustomApi) {
+      setApiError('如果现在配置自定义 API，请同时填写 Base URL 和 API Key；也可以清空后稍后再配置。');
+      return;
+    }
+    setApiError('');
+    setStep((prev) => Math.min(2, prev + 1));
+  };
 
   return (
     <div className="fixed inset-0 z-[999] bg-claude-bg text-claude-text flex items-center justify-center px-6 py-8">
@@ -145,36 +162,77 @@ const Onboarding: React.FC<OnboardingProps> = ({ onComplete }) => {
           )}
 
           {step === 1 && (
-            <div className="grid grid-cols-2 gap-4">
-              <button
-                onClick={() => setMode('official')}
-                className={`rounded-2xl border px-5 py-5 text-left transition-all ${
-                  mode === 'official' ? 'border-[#2E7CF6]/45 bg-[#2E7CF6]/10' : 'border-claude-border hover:bg-claude-hover'
-                }`}
-              >
-                <div className={`mb-4 flex h-10 w-10 items-center justify-center rounded-xl ${mode === 'official' ? 'bg-[#D97757]/12 text-[#D97757]' : 'bg-claude-hover text-claude-textSecondary'}`}>
-                  <KeyRound size={18} />
-                </div>
-                <div className="text-[15px] font-semibold text-claude-text">官方 Anthropic API</div>
-                <div className="mt-2 text-[12px] leading-5 text-claude-textSecondary">
-                  直接使用 Anthropic Console 生成的官方 API Key，默认走 `api.anthropic.com`。
-                </div>
-              </button>
+            <div className="space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <button
+                  onClick={() => { setMode('official'); setApiError(''); }}
+                  className={`rounded-2xl border px-5 py-5 text-left transition-all ${
+                    mode === 'official' ? 'border-[#2E7CF6]/45 bg-[#2E7CF6]/10' : 'border-claude-border hover:bg-claude-hover'
+                  }`}
+                >
+                  <div className={`mb-4 flex h-10 w-10 items-center justify-center rounded-xl ${mode === 'official' ? 'bg-[#D97757]/12 text-[#D97757]' : 'bg-claude-hover text-claude-textSecondary'}`}>
+                    <KeyRound size={18} />
+                  </div>
+                  <div className="text-[15px] font-semibold text-claude-text">官方 Anthropic API</div>
+                  <div className="mt-2 text-[12px] leading-5 text-claude-textSecondary">
+                    直接使用 Anthropic Console 生成的官方 API Key，默认走 api.anthropic.com。
+                  </div>
+                </button>
 
-              <button
-                onClick={() => setMode('selfhosted')}
-                className={`rounded-2xl border px-5 py-5 text-left transition-all ${
-                  mode === 'selfhosted' ? 'border-[#2E7CF6]/45 bg-[#2E7CF6]/10' : 'border-claude-border hover:bg-claude-hover'
-                }`}
-              >
-                <div className={`mb-4 flex h-10 w-10 items-center justify-center rounded-xl ${mode === 'selfhosted' ? 'bg-[#2E7CF6]/12 text-[#2E7CF6]' : 'bg-claude-hover text-claude-textSecondary'}`}>
-                  <ServerCog size={18} />
+                <button
+                  onClick={() => setMode('selfhosted')}
+                  className={`rounded-2xl border px-5 py-5 text-left transition-all ${
+                    mode === 'selfhosted' ? 'border-[#2E7CF6]/45 bg-[#2E7CF6]/10' : 'border-claude-border hover:bg-claude-hover'
+                  }`}
+                >
+                  <div className={`mb-4 flex h-10 w-10 items-center justify-center rounded-xl ${mode === 'selfhosted' ? 'bg-[#2E7CF6]/12 text-[#2E7CF6]' : 'bg-claude-hover text-claude-textSecondary'}`}>
+                    <ServerCog size={18} />
+                  </div>
+                  <div className="text-[15px] font-semibold text-claude-text">自定义兼容 API</div>
+                  <div className="mt-2 text-[12px] leading-5 text-claude-textSecondary">
+                    适合中转站接口，支持 Claude / Anthropic 和 OpenAI 兼容接口。
+                  </div>
+                </button>
+              </div>
+
+              {mode === 'selfhosted' && (
+                <div className="rounded-2xl border border-[#2E7CF6]/25 bg-[#2E7CF6]/[0.04] px-5 py-4">
+                  <div className="mb-3 flex items-center justify-between gap-3">
+                    <div>
+                      <div className="text-[14px] font-semibold text-claude-text">填写你的中转站</div>
+                      <div className="mt-1 text-[12px] text-claude-textSecondary">可以现在填写，也可以留空，稍后在设置里配置。</div>
+                    </div>
+                    <div className="rounded-full border border-[#2E7CF6]/25 px-2.5 py-1 text-[11px] text-[#2E7CF6]">中转站接口</div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <div className="mb-1.5 text-[12px] text-claude-textSecondary">Base URL</div>
+                      <input
+                        value={customBaseUrl}
+                        onChange={(e) => setCustomBaseUrl(e.target.value)}
+                        placeholder="https://your-relay.example.com"
+                        spellCheck={false}
+                        className="w-full rounded-xl border border-claude-border bg-claude-bg px-3 py-2.5 text-[13px] text-claude-text outline-none focus:border-[#2E7CF6]/55"
+                      />
+                    </div>
+                    <div>
+                      <div className="mb-1.5 text-[12px] text-claude-textSecondary">API Key</div>
+                      <input
+                        value={customApiKey}
+                        onChange={(e) => setCustomApiKey(e.target.value)}
+                        placeholder="输入中转站密钥"
+                        spellCheck={false}
+                        className="w-full rounded-xl border border-claude-border bg-claude-bg px-3 py-2.5 text-[13px] text-claude-text outline-none focus:border-[#2E7CF6]/55"
+                      />
+                    </div>
+                  </div>
+                  {(apiError || hasPartialCustomApi) && (
+                    <div className="mt-3 text-[12px] text-[#C6613F]">
+                      {apiError || '如果现在配置自定义 API，请同时填写 Base URL 和 API Key；也可以清空后稍后再配置。'}
+                    </div>
+                  )}
                 </div>
-                <div className="text-[15px] font-semibold text-claude-text">自定义兼容 API</div>
-                <div className="mt-2 text-[12px] leading-5 text-claude-textSecondary">
-                  适合 OpenAI 兼容接口、代理地址或你自己的中转网关。
-                </div>
-              </button>
+              )}
             </div>
           )}
 
@@ -225,7 +283,7 @@ const Onboarding: React.FC<OnboardingProps> = ({ onComplete }) => {
             {step < 2 ? (
               <button
                 disabled={!canContinue}
-                onClick={() => setStep((prev) => Math.min(2, prev + 1))}
+                onClick={handleNext}
                 className="rounded-xl bg-claude-text px-4 py-2 text-[13px] font-medium text-claude-bg hover:opacity-90 disabled:opacity-50"
               >
                 下一步

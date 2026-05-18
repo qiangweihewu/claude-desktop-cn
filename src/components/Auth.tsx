@@ -132,7 +132,7 @@ const Auth = () => {
                   <div>
                     <div className="text-[15px] font-semibold text-claude-text">自定义兼容 API</div>
                     <div className="mt-1 text-[12px] leading-5 text-claude-textSecondary">
-                      适合 OpenAI 兼容、代理网关或你自己的中转接口。
+                      适合中转站接口，包括 Claude 和 OpenAI 兼容接口。
                     </div>
                   </div>
                 </div>
@@ -221,7 +221,7 @@ const Auth = () => {
                   />
                 </div>
                 <div className="rounded-xl border border-claude-border bg-black/[0.02] dark:bg-white/[0.02] px-4 py-3 text-[12px] leading-6 text-claude-textSecondary">
-                  这里适合 OpenAI 兼容接口、代理服务或你自己的网关。保存后，模型与请求将走你填写的兼容地址。
+                  这里适合中转站接口，包括 Claude / Anthropic 和 OpenAI 兼容接口。保存后，模型与请求将走你填写的兼容地址。
                 </div>
                 <div className="flex justify-end">
                   <button
