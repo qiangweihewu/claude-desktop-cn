@@ -117,9 +117,9 @@ jobs:
       - name: Build frontend
         run: npm run build
 
-      - name: Build macOS package
-        timeout-minutes: 45
-        run: npx electron-builder --mac --publish never
+      - name: Build signed macOS app
+        timeout-minutes: 20
+        run: npx electron-builder --mac dir --publish never -c.mac.notarize=false
         env:
           DEBUG: electron-builder,electron-osx-sign*,electron-notarize*
           CSC_LINK: ${{ secrets.CSC_LINK }}
@@ -127,6 +127,54 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+
+      - name: Inspect signed macOS app
+        run: |
+          APP_PATH="$(find release -name 'Claude Desktop CN.app' -type d | head -n 1)"
+          if [ -z "$APP_PATH" ]; then
+            echo "Could not find signed app bundle in release/"
+            find release -maxdepth 3 -print
+            exit 1
+          fi
+          echo "APP_PATH=$APP_PATH" >> "$GITHUB_ENV"
+          echo "Signed app bundle: $APP_PATH"
+          du -sh "$APP_PATH"
+          echo "File count:"
+          find "$APP_PATH" -type f | wc -l
+
+      - name: Zip app for Apple notarization
+        run: |
+          NOTARY_ZIP="$RUNNER_TEMP/Claude-Desktop-CN-notary.zip"
+          APP_DIR="$(dirname "$APP_PATH")"
+          APP_NAME="$(basename "$APP_PATH")"
+          (cd "$APP_DIR" && ditto -c -k --sequesterRsrc --keepParent "$APP_NAME" "$NOTARY_ZIP")
+          echo "NOTARY_ZIP=$NOTARY_ZIP" >> "$GITHUB_ENV"
+          ls -lh "$NOTARY_ZIP"
+
+      - name: Notarize macOS app
+        timeout-minutes: 25
+        run: |
+          xcrun notarytool submit "$NOTARY_ZIP" \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_APP_SPECIFIC_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait \
+            --timeout 20m \
+            --progress
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+
+      - name: Staple and validate macOS app
+        run: |
+          xcrun stapler staple "$APP_PATH"
+          xcrun stapler validate "$APP_PATH"
+          spctl --assess --type execute --verbose=4 "$APP_PATH"
+
+      - name: Build macOS distributables
+        timeout-minutes: 20
+        run: npx electron-builder --mac dmg zip --prepackaged "$APP_PATH" --publish never -c.mac.notarize=false
 
       - name: Upload macOS artifact
         uses: actions/upload-artifact@v4
