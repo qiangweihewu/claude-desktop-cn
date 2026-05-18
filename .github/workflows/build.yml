@@ -121,7 +121,7 @@ jobs:
         timeout-minutes: 20
         run: npx electron-builder --mac dir --publish never -c.mac.notarize=false
         env:
-          DEBUG: electron-builder,electron-osx-sign*,electron-notarize*
+          DEBUG: electron-builder
           CSC_LINK: ${{ secrets.CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
@@ -152,21 +152,42 @@ jobs:
           ls -lh "$NOTARY_ZIP"
 
       - name: Notarize macOS app
-        timeout-minutes: 100
+        timeout-minutes: 45
         run: |
           set -o pipefail
 
           NOTARY_LOG="$RUNNER_TEMP/notarytool-submit.log"
-          set +e
-          xcrun notarytool submit "$NOTARY_ZIP" \
-            --apple-id "$APPLE_ID" \
-            --password "$APPLE_APP_SPECIFIC_PASSWORD" \
-            --team-id "$APPLE_TEAM_ID" \
-            --wait \
-            --timeout 90m \
-            --progress 2>&1 | tee "$NOTARY_LOG"
-          notary_status=${PIPESTATUS[0]}
-          set -e
+          MAX_ATTEMPTS=3
+          notary_status=1
+
+          for attempt in $(seq 1 "$MAX_ATTEMPTS"); do
+            echo "::group::Notarization attempt $attempt/$MAX_ATTEMPTS"
+            set +e
+            xcrun notarytool submit "$NOTARY_ZIP" \
+              --apple-id "$APPLE_ID" \
+              --password "$APPLE_APP_SPECIFIC_PASSWORD" \
+              --team-id "$APPLE_TEAM_ID" \
+              --wait \
+              --timeout 30m \
+              --progress 2>&1 | tee "$NOTARY_LOG"
+            notary_status=${PIPESTATUS[0]}
+            set -e
+            echo "::endgroup::"
+
+            if [ "$notary_status" -eq 0 ]; then
+              echo "Notarization succeeded on attempt $attempt"
+              break
+            fi
+
+            # Exit code 124 = our wait timed out at Apple's side; worth retrying.
+            # Other non-zero codes usually mean a real rejection — but the
+            # `Invalid` status from notarytool still exits non-zero, so we
+            # surface the submission log below before deciding to retry.
+            if [ "$attempt" -lt "$MAX_ATTEMPTS" ]; then
+              echo "Notarization attempt $attempt failed (status=$notary_status). Sleeping 60s before retry…"
+              sleep 60
+            fi
+          done
 
           submission_id="$(awk '/id: / && $2 ~ /^[0-9a-f-]+$/ { print $2; exit }' "$NOTARY_LOG" || true)"
           if [ -n "$submission_id" ]; then

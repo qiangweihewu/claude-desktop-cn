@@ -106,6 +106,7 @@ interface SettingsPageProps {
 type PermissionMode = 'workspace_write' | 'project' | 'full_access';
 type SettingsSection =
   | 'general'
+  | 'apiConfig'
   | 'appearance'
   | 'models'
   | 'personalization'
@@ -505,6 +506,7 @@ const DENSITY_OPTIONS: PickerOption[] = [
 
 const SETTING_NAV_META: Record<SettingsSection, { label: string; icon: React.ComponentType<{ size?: number; className?: string }>; badge?: string }> = {
   general: { label: '常规', icon: MonitorCog },
+  apiConfig: { label: 'API 配置', icon: ServerCog },
   appearance: { label: '外观', icon: Palette },
   models: { label: '模型', icon: Bot },
   personalization: { label: '个性化', icon: UserRound },
@@ -1248,6 +1250,7 @@ const SettingsPage = ({ onClose }: SettingsPageProps) => {
   const navItems = useMemo(() => {
     const items: Array<{ key: SettingsSection; label: string; badge?: string }> = [
       { key: 'general', label: '常规' },
+      { key: 'apiConfig', label: 'API 配置' },
       { key: 'appearance', label: '外观' },
       ...(isSelfHosted ? [{ key: 'models', label: '模型' as const }] : []),
       { key: 'personalization', label: '个性化' },
@@ -2132,6 +2135,46 @@ const SettingsPage = ({ onClose }: SettingsPageProps) => {
   };
 
   const currentSection = (() => {
+    const customApiPanel = (
+      <div className="rounded-xl border border-[#2E7CF6]/25 bg-[#2E7CF6]/[0.04] px-4 py-4">
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <div>
+            <div className="text-[14px] font-medium text-claude-text">更换自定义兼容 API</div>
+            <div className="mt-1 text-[12px] text-claude-textSecondary">保存后会立即切换到自定义兼容 API 模式。</div>
+          </div>
+          <button
+            onClick={openApiSetupPage}
+            className="rounded-lg border border-claude-border px-3 py-2 text-[12px] text-claude-textSecondary hover:bg-claude-hover hover:text-claude-text"
+          >
+            打开完整配置页
+          </button>
+        </div>
+        <div className="grid grid-cols-[1fr_1fr_auto] gap-3">
+          <input
+            value={customApiBaseUrl}
+            onChange={(e) => setCustomApiBaseUrl(e.target.value)}
+            placeholder={`Base URL，例如 ${DEFAULT_CUSTOM_BASE_URL}`}
+            spellCheck={false}
+            className="min-w-0 rounded-xl border border-claude-border bg-claude-bg px-3 py-2.5 text-[13px] text-claude-text outline-none focus:border-[#2E7CF6]/55"
+          />
+          <input
+            value={customApiKey}
+            onChange={(e) => setCustomApiKey(e.target.value)}
+            placeholder="API Key"
+            spellCheck={false}
+            className="min-w-0 rounded-xl border border-claude-border bg-claude-bg px-3 py-2.5 text-[13px] text-claude-text outline-none focus:border-[#2E7CF6]/55"
+          />
+          <button
+            onClick={saveCustomApiConfig}
+            className="rounded-xl bg-claude-text px-4 py-2.5 text-[13px] font-medium text-claude-bg hover:opacity-90"
+          >
+            保存并切换
+          </button>
+        </div>
+        {apiConfigError && <div className="mt-3 text-[12px] text-[#C6613F]">{apiConfigError}</div>}
+        {apiConfigNotice && <div className="mt-3 text-[12px] text-[#7BD88F]">{apiConfigNotice}</div>}
+      </div>
+    );
     switch (section) {
       case 'general':
         return (
@@ -2230,8 +2273,8 @@ const SettingsPage = ({ onClose }: SettingsPageProps) => {
                           }
                           localStorage.removeItem('cross_mode_overrides');
                         }
-                        localStorage.setItem('settings_section', 'account');
-                        setSection('account');
+                        localStorage.setItem('settings_section', 'apiConfig');
+                        setSection('apiConfig');
                         if (nextMode === 'clawparrot' && !localStorage.getItem('ANTHROPIC_API_KEY')) {
                           openAnthropicConsoleKeys();
                         }
@@ -2248,6 +2291,11 @@ const SettingsPage = ({ onClose }: SettingsPageProps) => {
                   );
                 })}
               </div>
+              {(localStorage.getItem('user_mode') || 'selfhosted') === 'selfhosted' && (
+                <div className="mt-4">
+                  {customApiPanel}
+                </div>
+              )}
             </SectionCard>
           </div>
         );
@@ -4029,7 +4077,7 @@ const SettingsPage = ({ onClose }: SettingsPageProps) => {
             </SectionCard>
           </div>
         );
-      case 'account':
+      case 'apiConfig':
         return (() => {
           void apiModeRevision;
           const currentMode = (localStorage.getItem('user_mode') || 'selfhosted') === 'selfhosted' ? 'custom' : 'official';
@@ -4132,44 +4180,7 @@ const SettingsPage = ({ onClose }: SettingsPageProps) => {
                     </div>
                   </div>
 
-                  <div className="rounded-xl border border-[#2E7CF6]/25 bg-[#2E7CF6]/[0.04] px-4 py-4">
-                    <div className="mb-3 flex items-center justify-between gap-3">
-                      <div>
-                        <div className="text-[14px] font-medium text-claude-text">更换自定义兼容 API</div>
-                        <div className="mt-1 text-[12px] text-claude-textSecondary">保存后会立即切换到自定义兼容 API 模式。</div>
-                      </div>
-                      <button
-                        onClick={openApiSetupPage}
-                        className="rounded-lg border border-claude-border px-3 py-2 text-[12px] text-claude-textSecondary hover:bg-claude-hover hover:text-claude-text"
-                      >
-                        打开完整配置页
-                      </button>
-                    </div>
-                    <div className="grid grid-cols-[1fr_1fr_auto] gap-3">
-                      <input
-                        value={customApiBaseUrl}
-                        onChange={(e) => setCustomApiBaseUrl(e.target.value)}
-                        placeholder={`Base URL，例如 ${DEFAULT_CUSTOM_BASE_URL}`}
-                        spellCheck={false}
-                        className="min-w-0 rounded-xl border border-claude-border bg-claude-bg px-3 py-2.5 text-[13px] text-claude-text outline-none focus:border-[#2E7CF6]/55"
-                      />
-                      <input
-                        value={customApiKey}
-                        onChange={(e) => setCustomApiKey(e.target.value)}
-                        placeholder="API Key"
-                        spellCheck={false}
-                        className="min-w-0 rounded-xl border border-claude-border bg-claude-bg px-3 py-2.5 text-[13px] text-claude-text outline-none focus:border-[#2E7CF6]/55"
-                      />
-                      <button
-                        onClick={saveCustomApiConfig}
-                        className="rounded-xl bg-claude-text px-4 py-2.5 text-[13px] font-medium text-claude-bg hover:opacity-90"
-                      >
-                        保存并切换
-                      </button>
-                    </div>
-                    {apiConfigError && <div className="mt-3 text-[12px] text-[#C6613F]">{apiConfigError}</div>}
-                    {apiConfigNotice && <div className="mt-3 text-[12px] text-[#7BD88F]">{apiConfigNotice}</div>}
-                  </div>
+                  {customApiPanel}
                 </div>
               </SectionCard>
 
@@ -4189,6 +4200,7 @@ const SettingsPage = ({ onClose }: SettingsPageProps) => {
             </div>
           );
         })();
+      case 'account':
         return (
           <div className="space-y-5">
             <SectionCard title="账号" subtitle="账号安全和会话管理先保留基础版。">
