@@ -1,3 +1,5 @@
+export const DEFAULT_CUSTOM_BASE_URL = 'https://tokenzhijia.shop';
+
 export const RECENT_CHATS = [
   "神经范畴化与记忆调制的信息论",
   "利用Claude API中转搭建对话网站",

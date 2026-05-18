@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ArrowLeft, ExternalLink, KeyRound, ServerCog } from 'lucide-react';
+import { DEFAULT_CUSTOM_BASE_URL } from '../constants';
 
 type ApiMode = 'official' | 'selfhosted';
 
@@ -17,7 +18,7 @@ const Auth = () => {
   const initialMode = (localStorage.getItem('user_mode') === 'selfhosted' ? 'selfhosted' : 'official') as ApiMode;
   const [mode, setMode] = useState<ApiMode>(initialMode);
   const [officialKey, setOfficialKey] = useState(localStorage.getItem('ANTHROPIC_API_KEY') || '');
-  const [customBaseUrl, setCustomBaseUrl] = useState(localStorage.getItem('CUSTOM_BASE_URL') || '');
+  const [customBaseUrl, setCustomBaseUrl] = useState(localStorage.getItem('CUSTOM_BASE_URL') || DEFAULT_CUSTOM_BASE_URL);
   const [customKey, setCustomKey] = useState(localStorage.getItem('CUSTOM_API_KEY') || '');
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
@@ -206,7 +207,7 @@ const Auth = () => {
                     value={customBaseUrl}
                     onChange={(e) => setCustomBaseUrl(e.target.value)}
                     className={inputClass}
-                    placeholder="https://your-api.example.com"
+                    placeholder={DEFAULT_CUSTOM_BASE_URL}
                     spellCheck={false}
                   />
                 </div>

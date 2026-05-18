@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { FolderOpen, KeyRound, Monitor, ServerCog } from 'lucide-react';
 import ClaudeLogo from './ClaudeLogo';
+import { DEFAULT_CUSTOM_BASE_URL } from '../constants';
 
 interface OnboardingProps {
   onComplete: () => void;
@@ -21,7 +22,7 @@ const Onboarding: React.FC<OnboardingProps> = ({ onComplete }) => {
   const [mode, setMode] = useState<ApiMode>(
     localStorage.getItem('user_mode') === 'selfhosted' ? 'selfhosted' : 'official',
   );
-  const [customBaseUrl, setCustomBaseUrl] = useState(localStorage.getItem('CUSTOM_BASE_URL') || '');
+  const [customBaseUrl, setCustomBaseUrl] = useState(localStorage.getItem('CUSTOM_BASE_URL') || DEFAULT_CUSTOM_BASE_URL);
   const [customApiKey, setCustomApiKey] = useState(localStorage.getItem('CUSTOM_API_KEY') || '');
   const [apiError, setApiError] = useState('');
   const [workspace, setWorkspace] = useState(localStorage.getItem('workspace_path') || '');
@@ -71,8 +72,15 @@ const Onboarding: React.FC<OnboardingProps> = ({ onComplete }) => {
       localStorage.removeItem('CUSTOM_API_KEY');
       localStorage.removeItem('CUSTOM_BASE_URL');
     } else {
-      if (customBaseUrl.trim()) localStorage.setItem('CUSTOM_BASE_URL', customBaseUrl.trim());
-      if (customApiKey.trim()) localStorage.setItem('CUSTOM_API_KEY', customApiKey.trim());
+      const baseUrl = customBaseUrl.trim();
+      const apiKey = customApiKey.trim();
+      if (baseUrl && apiKey) {
+        localStorage.setItem('CUSTOM_BASE_URL', baseUrl);
+        localStorage.setItem('CUSTOM_API_KEY', apiKey);
+      } else {
+        localStorage.removeItem('CUSTOM_API_KEY');
+        if (baseUrl === DEFAULT_CUSTOM_BASE_URL) localStorage.removeItem('CUSTOM_BASE_URL');
+      }
       localStorage.removeItem('gateway_user');
       localStorage.removeItem('gateway_quota');
     }
@@ -89,9 +97,13 @@ const Onboarding: React.FC<OnboardingProps> = ({ onComplete }) => {
     onComplete();
   };
 
+  const trimmedCustomBaseUrl = customBaseUrl.trim();
+  const trimmedCustomApiKey = customApiKey.trim();
+  const hasEditedCustomBaseUrl = Boolean(trimmedCustomBaseUrl && trimmedCustomBaseUrl !== DEFAULT_CUSTOM_BASE_URL);
+  const hasCustomApiInput = Boolean(hasEditedCustomBaseUrl || trimmedCustomApiKey);
   const hasPartialCustomApi = mode === 'selfhosted'
-    && Boolean(customBaseUrl.trim() || customApiKey.trim())
-    && !(customBaseUrl.trim() && customApiKey.trim());
+    && hasCustomApiInput
+    && !(trimmedCustomBaseUrl && trimmedCustomApiKey);
   const canContinue = step !== 1 || mode === 'official' || !hasPartialCustomApi;
 
   const handleNext = () => {
@@ -210,7 +222,7 @@ const Onboarding: React.FC<OnboardingProps> = ({ onComplete }) => {
                       <input
                         value={customBaseUrl}
                         onChange={(e) => setCustomBaseUrl(e.target.value)}
-                        placeholder="https://your-relay.example.com"
+                        placeholder={DEFAULT_CUSTOM_BASE_URL}
                         spellCheck={false}
                         className="w-full rounded-xl border border-claude-border bg-claude-bg px-3 py-2.5 text-[13px] text-claude-text outline-none focus:border-[#2E7CF6]/55"
                       />

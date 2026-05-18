@@ -97,6 +97,7 @@ import {
   setDefaultChatStyleId,
 } from '../utils/chatStyles';
 import { UiLanguage, getStoredUiLanguage, setStoredUiLanguage } from '../utils/chineseClientText';
+import { DEFAULT_CUSTOM_BASE_URL } from '../constants';
 
 interface SettingsPageProps {
   onClose: () => void;
@@ -822,7 +823,7 @@ const SettingsPage = ({ onClose }: SettingsPageProps) => {
   const [integratedShell, setIntegratedShell] = useState(localStorage.getItem('integrated_shell') || 'powershell');
   const [permissionMode, setPermissionMode] = useState<PermissionMode>('full_access');
   const [apiModeRevision, setApiModeRevision] = useState(0);
-  const [customApiBaseUrl, setCustomApiBaseUrl] = useState(localStorage.getItem('CUSTOM_BASE_URL') || '');
+  const [customApiBaseUrl, setCustomApiBaseUrl] = useState(localStorage.getItem('CUSTOM_BASE_URL') || DEFAULT_CUSTOM_BASE_URL);
   const [customApiKey, setCustomApiKey] = useState(localStorage.getItem('CUSTOM_API_KEY') || '');
   const [apiConfigNotice, setApiConfigNotice] = useState('');
   const [apiConfigError, setApiConfigError] = useState('');
@@ -4148,7 +4149,7 @@ const SettingsPage = ({ onClose }: SettingsPageProps) => {
                       <input
                         value={customApiBaseUrl}
                         onChange={(e) => setCustomApiBaseUrl(e.target.value)}
-                        placeholder="Base URL，例如 https://your-relay.example.com"
+                        placeholder={`Base URL，例如 ${DEFAULT_CUSTOM_BASE_URL}`}
                         spellCheck={false}
                         className="min-w-0 rounded-xl border border-claude-border bg-claude-bg px-3 py-2.5 text-[13px] text-claude-text outline-none focus:border-[#2E7CF6]/55"
                       />
