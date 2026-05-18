@@ -118,8 +118,10 @@ jobs:
         run: npm run build
 
       - name: Build macOS package
+        timeout-minutes: 45
         run: npx electron-builder --mac --publish never
         env:
+          DEBUG: electron-builder,electron-osx-sign*,electron-notarize*
           CSC_LINK: ${{ secrets.CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
           APPLE_ID: ${{ secrets.APPLE_ID }}

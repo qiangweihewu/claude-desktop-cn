@@ -1,7 +1,7 @@
 {
   "name": "claude-desktop",
   "private": true,
-  "version": "1.6.33",
+  "version": "1.6.34",
   "description": "Claude Desktop - AI assistant with native capabilities",
   "author": {
     "name": "Qiao-920",
@@ -31,8 +31,7 @@
     },
     "files": [
       "dist/**/*",
-      "electron/**/*",
-      "node_modules/**/*"
+      "electron/**/*"
     ],
     "asarUnpack": [],
     "extraResources": [
