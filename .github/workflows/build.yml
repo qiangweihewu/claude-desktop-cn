@@ -152,15 +152,45 @@ jobs:
           ls -lh "$NOTARY_ZIP"
 
       - name: Notarize macOS app
-        timeout-minutes: 25
+        timeout-minutes: 100
         run: |
+          set -o pipefail
+
+          NOTARY_LOG="$RUNNER_TEMP/notarytool-submit.log"
+          set +e
           xcrun notarytool submit "$NOTARY_ZIP" \
             --apple-id "$APPLE_ID" \
             --password "$APPLE_APP_SPECIFIC_PASSWORD" \
             --team-id "$APPLE_TEAM_ID" \
             --wait \
-            --timeout 20m \
-            --progress
+            --timeout 90m \
+            --progress 2>&1 | tee "$NOTARY_LOG"
+          notary_status=${PIPESTATUS[0]}
+          set -e
+
+          submission_id="$(awk '/id: / && $2 ~ /^[0-9a-f-]+$/ { print $2; exit }' "$NOTARY_LOG" || true)"
+          if [ -n "$submission_id" ]; then
+            echo "NOTARY_SUBMISSION_ID=$submission_id" >> "$GITHUB_ENV"
+            echo "Notary submission id: $submission_id"
+          fi
+
+          if [ "$notary_status" -ne 0 ] && [ -n "$submission_id" ]; then
+            echo "::group::Notary submission info"
+            xcrun notarytool info "$submission_id" \
+              --apple-id "$APPLE_ID" \
+              --password "$APPLE_APP_SPECIFIC_PASSWORD" \
+              --team-id "$APPLE_TEAM_ID" || true
+            echo "::endgroup::"
+
+            echo "::group::Notary submission log"
+            xcrun notarytool log "$submission_id" \
+              --apple-id "$APPLE_ID" \
+              --password "$APPLE_APP_SPECIFIC_PASSWORD" \
+              --team-id "$APPLE_TEAM_ID" || true
+            echo "::endgroup::"
+          fi
+
+          exit "$notary_status"
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
