@@ -8019,6 +8019,49 @@ You have the following skills available. When a user's request matches a skill's
         return { modelId, provider, apiKey, baseUrl, apiFormat, supportsWebSearch, webSearchStrategy };
     }
 
+    // Pre-flight ping to upstream so gateway errors (price/auth/model) surface
+    // before we pay the cost of spawning a fresh engine subprocess. Only meant
+    // to be called when no live engine exists for the conversation.
+    // Returns { ok: true } on 2xx, { ok: false, status, message } on hard
+    // failure, or { ok: true } on ambiguous network noise (let engine retry).
+    async function probeUpstream(config) {
+        const { baseUrl, apiKey, apiFormat, modelId } = config;
+        if (!baseUrl || !apiKey) return { ok: true };
+        let endpoint = normalizeBaseUrl(baseUrl);
+        if (!endpoint.endsWith('/v1')) endpoint += '/v1';
+        const isOpenAI = apiFormat === 'openai';
+        endpoint += isOpenAI ? '/chat/completions' : '/messages';
+        const headers = isOpenAI
+            ? { 'content-type': 'application/json', 'authorization': 'Bearer ' + apiKey }
+            : { 'content-type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' };
+        const body = { model: modelId, max_tokens: 1, messages: [{ role: 'user', content: 'ping' }] };
+        try {
+            const res = await fetch(endpoint, {
+                method: 'POST',
+                headers,
+                body: JSON.stringify(body),
+                signal: AbortSignal.timeout(4000),
+            });
+            if (res.ok) return { ok: true };
+            const errText = await res.text().catch(() => '');
+            return {
+                ok: false,
+                status: res.status,
+                message: 'API Error: ' + res.status + ' ' + errText.slice(0, 400) + ' [endpoint: ' + endpoint + ']',
+            };
+        } catch (err) {
+            const msg = (err && err.message) ? err.message : String(err);
+            if (err && (err.name === 'TimeoutError' || /timeout/i.test(msg))) {
+                return { ok: false, status: 0, message: 'Upstream probe timeout (' + endpoint + ')' };
+            }
+            if (/ECONNREFUSED|ENOTFOUND|EAI_AGAIN|ECONNRESET/.test(msg)) {
+                return { ok: false, status: 0, message: 'Cannot reach upstream: ' + msg + ' [endpoint: ' + endpoint + ']' };
+            }
+            console.warn('[Chat] Pre-flight probe non-fatal error, proceeding:', msg);
+            return { ok: true };
+        }
+    }
+
     function handleTurnEvent(engine, convId, conv, evt) {
         const turn = engine.turn;
         if (!turn || !turn.sendSSE) return;
@@ -8587,6 +8630,23 @@ You have the following skills available. When a user's request matches a skill's
                 engine = null;
             }
             if (!engine) {
+                // Pre-flight ping to upstream. If the gateway returns a hard
+                // error (price not configured, auth, model missing), surface
+                // it within ~1 RTT instead of waiting for engine spawn +
+                // round-trip + exit (~3-10s).
+                const probe = await probeUpstream(config);
+                if (!probe.ok) {
+                    console.warn('[Chat] Aborting before spawn due to probe',
+                        '| conv=', conversation_id,
+                        '| status=', probe.status,
+                        '| msg=', (probe.message || '').slice(0, 200));
+                    sendSSE({ type: 'error', error: probe.message });
+                    sendSSE({ type: 'message_stop' });
+                    try { res.end(); } catch (_) {}
+                    const stream = activeStreams.get(conversation_id);
+                    if (stream) { stream.done = true; }
+                    return;
+                }
                 const sysPrompt = buildChatSystemPrompt(conv, user_mode, user_profile);
                 engine = spawnPersistentEngine(conversation_id, conv, { ...config, sysPrompt, userProfileKey });
             }
