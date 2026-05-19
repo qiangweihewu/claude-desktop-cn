@@ -1753,6 +1753,64 @@ if __name__ == "__main__":
         return { searchResults: results, summaryText };
     }
 
+    // Relay — POST a single-tool web_search request to a sub2api-style relay that
+    // emulates Anthropic's web_search_20250305 server tool. This lets users reuse the
+    // Brave/Tavily quota already configured on their relay backend, without re-entering
+    // API keys in the desktop.
+    //
+    // Relay contract (sub2api gateway_websearch_emulation.go):
+    //   1. Request must have tools.length === 1 with type web_search_20250305 (or alias).
+    //   2. Relay calls third-party search, then returns an Anthropic-format message with
+    //      content blocks: server_tool_use → web_search_tool_result → text → end_turn.
+    async function searchViaRelay(query, baseUrl, apiKey) {
+        if (!baseUrl) throw new Error('Relay base URL not configured');
+        if (!apiKey) throw new Error('Relay API key not configured');
+        const endpoint = baseUrl.replace(/\/+$/, '') + '/v1/messages';
+        const resp = await fetch(endpoint, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'x-api-key': apiKey,
+                'anthropic-version': '2023-06-01',
+            },
+            body: JSON.stringify({
+                model: 'claude-sonnet-4-6',
+                max_tokens: 4096,
+                messages: [{ role: 'user', content: query }],
+                tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 1 }],
+                stream: false,
+            }),
+            signal: AbortSignal.timeout(30000),
+        });
+        if (!resp.ok) {
+            const txt = await resp.text().catch(() => '');
+            throw new Error('Relay ' + resp.status + ': ' + txt.slice(0, 300));
+        }
+        const data = await resp.json();
+        const content = Array.isArray(data.content) ? data.content : [];
+        let searchResults = [];
+        let summaryText = '';
+        for (const block of content) {
+            if (block && block.type === 'web_search_tool_result') {
+                const items = Array.isArray(block.content) ? block.content : [];
+                searchResults = items
+                    .filter(it => it && (it.type === 'web_search_result' || it.url))
+                    .map(it => ({
+                        title: it.title || '',
+                        url: it.url || '',
+                        // sub2api emits page_content; some relays emit snippet or summary
+                        snippet: it.page_content || it.snippet || it.summary || '',
+                    }))
+                    .filter(r => r.url);
+            } else if (block && block.type === 'text' && typeof block.text === 'string') {
+                summaryText = block.text;
+            }
+        }
+        if (!summaryText) summaryText = buildSearchSummary(query, searchResults);
+        console.log('[LocalSearch] Relay:', searchResults.length, 'results for', JSON.stringify(query));
+        return { searchResults, summaryText };
+    }
+
     // Plain-text helpers for the local backends.
     function stripHtml(s) {
         return String(s || '')
@@ -1781,8 +1839,14 @@ if __name__ == "__main__":
 
     // Persistent web search config — same JSON-on-disk + REST pattern as computer-use config.
     const webSearchConfigPath = path.join(userDataPath, 'web-search-config.json');
-    const defaultWebSearchConfig = { provider: 'none', tavilyApiKey: '', braveApiKey: '' };
-    const allowedWebSearchProviders = new Set(['none', 'duckduckgo', 'tavily', 'brave']);
+    const defaultWebSearchConfig = {
+        provider: 'none',
+        tavilyApiKey: '',
+        braveApiKey: '',
+        relayBaseUrl: '',
+        relayApiKey: '',
+    };
+    const allowedWebSearchProviders = new Set(['none', 'duckduckgo', 'tavily', 'brave', 'relay']);
 
     const readWebSearchConfig = () => {
         const raw = readJsonFile(webSearchConfigPath, defaultWebSearchConfig) || {};
@@ -1791,6 +1855,8 @@ if __name__ == "__main__":
             provider,
             tavilyApiKey: typeof raw.tavilyApiKey === 'string' ? raw.tavilyApiKey : '',
             braveApiKey: typeof raw.braveApiKey === 'string' ? raw.braveApiKey : '',
+            relayBaseUrl: typeof raw.relayBaseUrl === 'string' ? raw.relayBaseUrl : '',
+            relayApiKey: typeof raw.relayApiKey === 'string' ? raw.relayApiKey : '',
         };
     };
     const saveWebSearchConfig = (partial) => {
@@ -1798,6 +1864,8 @@ if __name__ == "__main__":
         if (!allowedWebSearchProviders.has(next.provider)) next.provider = 'none';
         next.tavilyApiKey = typeof next.tavilyApiKey === 'string' ? next.tavilyApiKey.trim() : '';
         next.braveApiKey = typeof next.braveApiKey === 'string' ? next.braveApiKey.trim() : '';
+        next.relayBaseUrl = typeof next.relayBaseUrl === 'string' ? next.relayBaseUrl.trim() : '';
+        next.relayApiKey = typeof next.relayApiKey === 'string' ? next.relayApiKey.trim() : '';
         writeJsonFile(webSearchConfigPath, next);
         return next;
     };
@@ -1809,6 +1877,7 @@ if __name__ == "__main__":
         if (cfg.provider === 'duckduckgo') return (q) => searchViaDDGLite(q);
         if (cfg.provider === 'tavily') return (q) => searchViaTavily(q, cfg.tavilyApiKey);
         if (cfg.provider === 'brave') return (q) => searchViaBrave(q, cfg.braveApiKey);
+        if (cfg.provider === 'relay') return (q) => searchViaRelay(q, cfg.relayBaseUrl, cfg.relayApiKey);
         return null;
     }
 
@@ -5486,6 +5555,9 @@ $literal = ConvertTo-HotkeyLiteral $keys
                 provider: cfg.provider,
                 tavilyApiKeyConfigured: Boolean(cfg.tavilyApiKey),
                 braveApiKeyConfigured: Boolean(cfg.braveApiKey),
+                relayConfigured: Boolean(cfg.relayBaseUrl && cfg.relayApiKey),
+                // The renderer wants to display "which relay will be used" without exposing the key.
+                relayBaseUrlHint: cfg.relayBaseUrl,
             },
         });
     });
@@ -5502,6 +5574,13 @@ $literal = ConvertTo-HotkeyLiteral $keys
             braveApiKey: typeof incoming.braveApiKey === 'string' && incoming.braveApiKey !== ''
                 ? incoming.braveApiKey
                 : current.braveApiKey,
+            // Relay creds: renderer pushes these from CUSTOM_BASE_URL / CUSTOM_API_KEY localStorage.
+            // Empty string means "clear" for baseUrl (e.g., user switched to clawparrot mode);
+            // empty string means "preserve" for apiKey (avoid re-sending secret if unchanged).
+            relayBaseUrl: typeof incoming.relayBaseUrl === 'string' ? incoming.relayBaseUrl : current.relayBaseUrl,
+            relayApiKey: typeof incoming.relayApiKey === 'string' && incoming.relayApiKey !== ''
+                ? incoming.relayApiKey
+                : current.relayApiKey,
         };
         const saved = saveWebSearchConfig(partial);
         res.json({
@@ -5509,6 +5588,8 @@ $literal = ConvertTo-HotkeyLiteral $keys
                 provider: saved.provider,
                 tavilyApiKeyConfigured: Boolean(saved.tavilyApiKey),
                 braveApiKeyConfigured: Boolean(saved.braveApiKey),
+                relayConfigured: Boolean(saved.relayBaseUrl && saved.relayApiKey),
+                relayBaseUrlHint: saved.relayBaseUrl,
             },
         });
     });

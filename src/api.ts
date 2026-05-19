@@ -1825,12 +1825,14 @@ export async function updateComputerUseConfig(
 
 // --- Web search (local backend) ---
 
-export type WebSearchProvider = 'none' | 'duckduckgo' | 'tavily' | 'brave';
+export type WebSearchProvider = 'none' | 'duckduckgo' | 'tavily' | 'brave' | 'relay';
 
 export interface WebSearchConfig {
   provider: WebSearchProvider;
   tavilyApiKeyConfigured: boolean;
   braveApiKeyConfigured: boolean;
+  relayConfigured: boolean;
+  relayBaseUrlHint?: string;
 }
 
 export async function getWebSearchConfig(): Promise<{ config: WebSearchConfig }> {
@@ -1839,7 +1841,13 @@ export async function getWebSearchConfig(): Promise<{ config: WebSearchConfig }>
 }
 
 export async function updateWebSearchConfig(
-  data: { provider?: WebSearchProvider; tavilyApiKey?: string; braveApiKey?: string },
+  data: {
+    provider?: WebSearchProvider;
+    tavilyApiKey?: string;
+    braveApiKey?: string;
+    relayBaseUrl?: string;
+    relayApiKey?: string;
+  },
 ): Promise<{ config: WebSearchConfig }> {
   const res = await request('/web-search/config', {
     method: 'POST',

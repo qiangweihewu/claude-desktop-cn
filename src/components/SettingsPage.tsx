@@ -842,6 +842,8 @@ const SettingsPage = ({ onClose }: SettingsPageProps) => {
     provider: 'none',
     tavilyApiKeyConfigured: false,
     braveApiKeyConfigured: false,
+    relayConfigured: false,
+    relayBaseUrlHint: '',
   });
   const [webSearchTavilyKeyDraft, setWebSearchTavilyKeyDraft] = useState('');
   const [webSearchBraveKeyDraft, setWebSearchBraveKeyDraft] = useState('');
@@ -1238,13 +1240,26 @@ const SettingsPage = ({ onClose }: SettingsPageProps) => {
     setWebSearchError('');
     setWebSearchNotice('');
     try {
-      const payload: { provider?: WebSearchProvider; tavilyApiKey?: string; braveApiKey?: string } = {
-        provider: overrides.provider ?? webSearchConfig.provider,
-      };
+      const nextProvider = overrides.provider ?? webSearchConfig.provider;
+      const payload: {
+        provider?: WebSearchProvider;
+        tavilyApiKey?: string;
+        braveApiKey?: string;
+        relayBaseUrl?: string;
+        relayApiKey?: string;
+      } = { provider: nextProvider };
       const tavilyKey = overrides.tavilyApiKey ?? webSearchTavilyKeyDraft;
       const braveKey = overrides.braveApiKey ?? webSearchBraveKeyDraft;
       if (tavilyKey) payload.tavilyApiKey = tavilyKey;
       if (braveKey) payload.braveApiKey = braveKey;
+      // When the user selects "use my relay", sync the relay creds from the
+      // current chat config (localStorage). bridge-server can't read localStorage
+      // directly, so the renderer pushes them on every relay-related save.
+      if (nextProvider === 'relay') {
+        payload.relayBaseUrl = (localStorage.getItem('CUSTOM_BASE_URL') || '').trim();
+        const relayKey = (localStorage.getItem('CUSTOM_API_KEY') || '').trim();
+        if (relayKey) payload.relayApiKey = relayKey;
+      }
       const { config } = await updateWebSearchConfig(payload);
       setWebSearchConfig(config);
       if (overrides.tavilyApiKey !== undefined || webSearchTavilyKeyDraft) setWebSearchTavilyKeyDraft('');
@@ -4286,6 +4301,7 @@ const SettingsPage = ({ onClose }: SettingsPageProps) => {
                 <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
                   {[
                     { value: 'none' as WebSearchProvider, label: '不启用', desc: '保持现状。需要上游 API 自己支持 web_search。' },
+                    { value: 'relay' as WebSearchProvider, label: '使用中转站搜索', desc: '复用你当前 API 配置里的中转站，零额外配置 —— 如果中转站后台开启了 Brave / Tavily 直接生效。' },
                     { value: 'duckduckgo' as WebSearchProvider, label: 'DuckDuckGo', desc: '零配置、免费。直接解析 DDG Lite 的纯 HTML，对日常查询够用。' },
                     { value: 'tavily' as WebSearchProvider, label: 'Tavily', desc: '专为 LLM 设计的搜索 API，质量最好。需要 API Key（每月 1000 次免费）。' },
                     { value: 'brave' as WebSearchProvider, label: 'Brave Search', desc: '需要 API Key（每月 2000 次免费）。' },
@@ -4370,6 +4386,55 @@ const SettingsPage = ({ onClose }: SettingsPageProps) => {
                     </div>
                   </div>
                 )}
+
+                {webSearchConfig.provider === 'relay' && (() => {
+                  const userMode = (localStorage.getItem('user_mode') || 'selfhosted');
+                  const customBaseUrl = (localStorage.getItem('CUSTOM_BASE_URL') || '').trim();
+                  const customApiKeySet = Boolean((localStorage.getItem('CUSTOM_API_KEY') || '').trim());
+                  const usable = userMode === 'selfhosted' && customBaseUrl && customApiKeySet;
+                  const displayUrl = webSearchConfig.relayBaseUrlHint || customBaseUrl;
+                  return (
+                    <div className="rounded-xl border border-claude-border bg-claude-bg px-4 py-4">
+                      <div className="mb-2 flex items-center justify-between">
+                        <div className="text-[14px] font-medium text-claude-text">中转站</div>
+                        <div className={`rounded-full px-2.5 py-1 text-[11px] ${
+                          webSearchConfig.relayConfigured && usable
+                            ? 'bg-[#7BD88F]/10 text-[#7BD88F]'
+                            : 'bg-[#F2C94C]/10 text-[#F2C94C]'
+                        }`}>
+                          {webSearchConfig.relayConfigured && usable ? '已就绪' : '未就绪'}
+                        </div>
+                      </div>
+                      {displayUrl ? (
+                        <div className="text-[12px] text-claude-textSecondary break-all">
+                          将使用：<code className="text-claude-text">{displayUrl}</code>
+                        </div>
+                      ) : (
+                        <div className="text-[12px] text-claude-textSecondary">尚未从 API 配置读取到中转站地址。</div>
+                      )}
+                      {userMode !== 'selfhosted' && (
+                        <div className="mt-3 rounded-lg border border-[#F2C94C]/25 bg-[#F2C94C]/[0.05] px-3 py-2 text-[12px] leading-5 text-[#C6883B]">
+                          当前在「官方 Anthropic API」模式下，没有中转站。请切换到「自定义兼容 API」，或换其他 provider。
+                        </div>
+                      )}
+                      {userMode === 'selfhosted' && !customApiKeySet && (
+                        <div className="mt-3 rounded-lg border border-[#F2C94C]/25 bg-[#F2C94C]/[0.05] px-3 py-2 text-[12px] leading-5 text-[#C6883B]">
+                          自定义 API 还没填 API Key。先去「API 配置」补上。
+                        </div>
+                      )}
+                      <button
+                        onClick={() => saveWebSearchSettings({ provider: 'relay' })}
+                        disabled={webSearchBusy !== '' || !usable}
+                        className="mt-3 rounded-lg border border-claude-border px-3 py-1.5 text-[12px] text-claude-text hover:bg-claude-hover disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        重新同步当前中转站凭据
+                      </button>
+                      <div className="mt-3 text-[11px] leading-5 text-claude-textSecondary">
+                        原理：你的查询会以「只带一个 web_search 工具」的最小请求方式发到中转站，触发后端的 Brave / Tavily 模拟，再把结果原样回传。中转站后台需先在「联网搜索」里启用 Brave 或 Tavily provider。
+                      </div>
+                    </div>
+                  );
+                })()}
 
                 {webSearchConfig.provider !== 'none' && (
                   <div className="rounded-xl border border-[#2E7CF6]/25 bg-[#2E7CF6]/[0.04] px-4 py-4">
