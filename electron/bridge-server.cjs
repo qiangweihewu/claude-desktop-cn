@@ -1639,6 +1639,239 @@ if __name__ == "__main__":
         return null;
     }
 
+    // ===== Local web search backends (user-supplied, works with any upstream) =====
+    // These run client-side (in the desktop app), independent of the upstream provider.
+    // The result shape mirrors the per-provider searchVia* helpers above:
+    //   { searchResults: [{ title, url, snippet? }], summaryText }
+
+    // DuckDuckGo Lite — zero-config, no API key. Parses the lite HTML endpoint that
+    // text browsers use; returns ~10 results.
+    async function searchViaDDGLite(query) {
+        const url = `https://lite.duckduckgo.com/lite/?q=${encodeURIComponent(query)}`;
+        const resp = await fetch(url, {
+            method: 'GET',
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15',
+                'Accept-Language': 'en-US,en;q=0.9,zh-CN;q=0.8',
+            },
+            redirect: 'follow',
+            signal: AbortSignal.timeout(15000),
+        });
+        if (!resp.ok) throw new Error('DDG Lite ' + resp.status);
+        const html = await resp.text();
+
+        // DDG Lite structure (no JS, plain HTML — class attrs use single quotes):
+        //   <a rel="nofollow" href="//duckduckgo.com/l/?uddg=<encoded>" class='result-link'>Title</a>
+        //   <td class='result-snippet'>Snippet text…</td>
+        // Note: in the real HTML href comes BEFORE class — match the whole tag, then pull each piece.
+        const results = [];
+        const linkRe = /<a\b([^>]*\bclass=['"]result-link['"][^>]*)>([\s\S]*?)<\/a>/gi;
+        const snippetRe = /<td[^>]*class=['"]result-snippet['"][^>]*>([\s\S]*?)<\/td>/gi;
+        const snippets = [];
+        let sm;
+        while ((sm = snippetRe.exec(html))) snippets.push(stripHtml(sm[1]));
+        let lm;
+        let i = 0;
+        while ((lm = linkRe.exec(html)) && results.length < 10) {
+            const hrefMatch = lm[1].match(/\bhref=["']([^"']+)["']/);
+            if (!hrefMatch) continue;
+            const rawUrl = hrefMatch[1];
+            // DDG wraps target URLs as /l/?uddg=<encoded>&rut=… — unwrap if present.
+            // The href is usually protocol-relative ("//duckduckgo.com/l/?...").
+            let realUrl = rawUrl;
+            const uddgMatch = rawUrl.match(/[?&]uddg=([^&]+)/);
+            if (uddgMatch) {
+                try { realUrl = decodeURIComponent(uddgMatch[1]); } catch (_) { /* keep raw */ }
+            } else if (rawUrl.startsWith('//')) {
+                realUrl = 'https:' + rawUrl;
+            }
+            results.push({
+                title: stripHtml(lm[2]).trim(),
+                url: realUrl,
+                snippet: snippets[i] || '',
+            });
+            i++;
+        }
+        const summaryText = buildSearchSummary(query, results);
+        console.log('[LocalSearch] DDG Lite:', results.length, 'results for', JSON.stringify(query));
+        return { searchResults: results, summaryText };
+    }
+
+    // Tavily — purpose-built for LLMs. 1000 free searches/month with a registered API key.
+    async function searchViaTavily(query, apiKey) {
+        if (!apiKey) throw new Error('Tavily API key not configured');
+        const resp = await fetch('https://api.tavily.com/search', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                api_key: apiKey,
+                query,
+                max_results: 10,
+                search_depth: 'basic',
+                include_answer: true,
+            }),
+            signal: AbortSignal.timeout(20000),
+        });
+        if (!resp.ok) {
+            const txt = await resp.text().catch(() => '');
+            throw new Error('Tavily ' + resp.status + ': ' + txt.slice(0, 200));
+        }
+        const data = await resp.json();
+        const results = (data.results || []).map(r => ({
+            title: r.title || '',
+            url: r.url || '',
+            snippet: r.content || '',
+        })).filter(r => r.url);
+        // Tavily's `answer` field is an LLM-synthesized summary — use it if present, otherwise build our own.
+        const summaryText = (data.answer && data.answer.trim()) || buildSearchSummary(query, results);
+        console.log('[LocalSearch] Tavily:', results.length, 'results for', JSON.stringify(query));
+        return { searchResults: results, summaryText };
+    }
+
+    // Brave Search — 2000 free queries/month with a registered API key.
+    async function searchViaBrave(query, apiKey) {
+        if (!apiKey) throw new Error('Brave Search API key not configured');
+        const url = 'https://api.search.brave.com/res/v1/web/search?q=' + encodeURIComponent(query) + '&count=10';
+        const resp = await fetch(url, {
+            method: 'GET',
+            headers: { 'X-Subscription-Token': apiKey, 'Accept': 'application/json' },
+            signal: AbortSignal.timeout(20000),
+        });
+        if (!resp.ok) {
+            const txt = await resp.text().catch(() => '');
+            throw new Error('Brave ' + resp.status + ': ' + txt.slice(0, 200));
+        }
+        const data = await resp.json();
+        const items = (data.web && data.web.results) || [];
+        const results = items.map(r => ({
+            title: r.title || '',
+            url: r.url || '',
+            snippet: r.description || '',
+        })).filter(r => r.url);
+        const summaryText = buildSearchSummary(query, results);
+        console.log('[LocalSearch] Brave:', results.length, 'results for', JSON.stringify(query));
+        return { searchResults: results, summaryText };
+    }
+
+    // Plain-text helpers for the local backends.
+    function stripHtml(s) {
+        return String(s || '')
+            .replace(/<[^>]+>/g, '')
+            .replace(/&nbsp;/g, ' ')
+            .replace(/&amp;/g, '&')
+            .replace(/&lt;/g, '<')
+            .replace(/&gt;/g, '>')
+            .replace(/&quot;/g, '"')
+            .replace(/&#39;/g, "'")
+            .replace(/\s+/g, ' ')
+            .trim();
+    }
+
+    function buildSearchSummary(query, results) {
+        if (!results.length) return 'No search results found for: ' + query;
+        const lines = [`Here are the search results for "${query}":`, ''];
+        results.forEach((r, idx) => {
+            lines.push(`${idx + 1}. **${r.title}**`);
+            lines.push(`   ${r.url}`);
+            if (r.snippet) lines.push(`   ${r.snippet}`);
+            lines.push('');
+        });
+        return lines.join('\n');
+    }
+
+    // Persistent web search config — same JSON-on-disk + REST pattern as computer-use config.
+    const webSearchConfigPath = path.join(userDataPath, 'web-search-config.json');
+    const defaultWebSearchConfig = { provider: 'none', tavilyApiKey: '', braveApiKey: '' };
+    const allowedWebSearchProviders = new Set(['none', 'duckduckgo', 'tavily', 'brave']);
+
+    const readWebSearchConfig = () => {
+        const raw = readJsonFile(webSearchConfigPath, defaultWebSearchConfig) || {};
+        const provider = allowedWebSearchProviders.has(raw.provider) ? raw.provider : 'none';
+        return {
+            provider,
+            tavilyApiKey: typeof raw.tavilyApiKey === 'string' ? raw.tavilyApiKey : '',
+            braveApiKey: typeof raw.braveApiKey === 'string' ? raw.braveApiKey : '',
+        };
+    };
+    const saveWebSearchConfig = (partial) => {
+        const next = { ...readWebSearchConfig(), ...(partial && typeof partial === 'object' ? partial : {}) };
+        if (!allowedWebSearchProviders.has(next.provider)) next.provider = 'none';
+        next.tavilyApiKey = typeof next.tavilyApiKey === 'string' ? next.tavilyApiKey.trim() : '';
+        next.braveApiKey = typeof next.braveApiKey === 'string' ? next.braveApiKey.trim() : '';
+        writeJsonFile(webSearchConfigPath, next);
+        return next;
+    };
+
+    // Resolve a local search strategy based on the user's stored config.
+    // Returns a function (query) => Promise<{searchResults, summaryText}>, or null if disabled.
+    function resolveLocalWebSearchStrategy() {
+        const cfg = readWebSearchConfig();
+        if (cfg.provider === 'duckduckgo') return (q) => searchViaDDGLite(q);
+        if (cfg.provider === 'tavily') return (q) => searchViaTavily(q, cfg.tavilyApiKey);
+        if (cfg.provider === 'brave') return (q) => searchViaBrave(q, cfg.braveApiKey);
+        return null;
+    }
+
+    // Same SSE shape as handleWebSearchProxy, but uses the local-strategy backends. Works for
+    // any upstream format because we never forward the request.
+    async function handleLocalWebSearchProxy(anthropicReq, target, res) {
+        let searchQuery = '';
+        const msgs = anthropicReq.messages || [];
+        for (let i = msgs.length - 1; i >= 0; i--) {
+            if (msgs[i].role !== 'user') continue;
+            const c = msgs[i].content;
+            if (typeof c === 'string') { searchQuery = c; break; }
+            if (Array.isArray(c)) { searchQuery = c.filter(b => b.type === 'text').map(b => b.text).join(' '); break; }
+        }
+        searchQuery = searchQuery.replace(/^Perform a web search for the query:\s*/i, '').trim();
+        const strategy = resolveLocalWebSearchStrategy();
+        console.log('[LocalSearch] Intercepted web_search_20250305, query:', JSON.stringify(searchQuery));
+
+        let searchResults = [];
+        let summaryText = '';
+        if (strategy) {
+            try {
+                const r = await strategy(searchQuery);
+                searchResults = r.searchResults || [];
+                summaryText = r.summaryText || '';
+            } catch (err) {
+                console.warn('[LocalSearch] backend failed:', err && err.message);
+                summaryText = 'Web search failed: ' + (err && err.message ? err.message : 'unknown error');
+            }
+        } else {
+            summaryText = 'Local web search is not configured.';
+        }
+        if (!summaryText) summaryText = 'Web search returned no results for: ' + searchQuery;
+
+        res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' });
+        const toolId = 'toolu_ws_' + Date.now();
+        const ev = (name, data) => res.write('event: ' + name + '\ndata: ' + JSON.stringify(data) + '\n\n');
+
+        ev('message_start', { type: 'message_start', message: { id: 'msg_ws_' + Date.now(), type: 'message', role: 'assistant', content: [], model: target.model || anthropicReq.model, usage: { input_tokens: 0, output_tokens: 0 } } });
+        ev('content_block_start', { type: 'content_block_start', index: 0, content_block: { type: 'server_tool_use', id: toolId, name: 'web_search', input: {} } });
+        ev('content_block_delta', { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: JSON.stringify({ query: searchQuery }) } });
+        ev('content_block_stop', { type: 'content_block_stop', index: 0 });
+
+        const resultContent = searchResults.length > 0
+            ? searchResults.map(r => ({ type: 'web_search_result', title: r.title, url: r.url }))
+            : [];
+        ev('content_block_start', { type: 'content_block_start', index: 1, content_block: { type: 'web_search_tool_result', tool_use_id: toolId, content: resultContent } });
+        ev('content_block_stop', { type: 'content_block_stop', index: 1 });
+
+        ev('content_block_start', { type: 'content_block_start', index: 2, content_block: { type: 'text', text: '' } });
+        if (summaryText) {
+            const chunkSize = 200;
+            for (let i = 0; i < summaryText.length; i += chunkSize) {
+                ev('content_block_delta', { type: 'content_block_delta', index: 2, delta: { type: 'text_delta', text: summaryText.slice(i, i + chunkSize) } });
+            }
+        }
+        ev('content_block_stop', { type: 'content_block_stop', index: 2 });
+
+        ev('message_delta', { type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: Math.ceil(summaryText.length / 4) } });
+        ev('message_stop', { type: 'message_stop' });
+        res.end();
+    }
+
     // Main handler: dispatch web_search_20250305 to a native provider strategy.
     // Only called when the provider is known to support web search — there is no generic fallback.
     async function handleWebSearchProxy(anthropicReq, target, res) {
@@ -1763,18 +1996,26 @@ if __name__ == "__main__":
                         }
                     }
 
-                    // Intercept web_search_20250305 server tool for OpenAI providers.
-                    // If the provider declares native web search support AND we have a known
-                    // native handler for its baseUrl, dispatch. Otherwise, strip the tool so
-                    // the model cannot claim to search (no generic fallback).
+                    // Intercept web_search_20250305 server tool.
+                    // Priority: (1) user-configured local backend (any upstream format) →
+                    //           (2) OpenAI-provider native search (DashScope / BigModel) →
+                    //           (3) Anthropic-format upstream: pass through, let upstream decide →
+                    //           (4) OpenAI-provider with no native support: strip.
                     const hasServerWebSearch = (anthropicReq.tools || []).some(t => t.type === 'web_search_20250305');
-                    if (hasServerWebSearch && target.format === 'openai') {
-                        const nativeAvailable = target.supportsWebSearch === true && resolveNativeSearchStrategy(target) !== null;
-                        if (nativeAvailable) {
-                            return await handleWebSearchProxy(anthropicReq, target, res);
+                    if (hasServerWebSearch) {
+                        const localStrategy = resolveLocalWebSearchStrategy();
+                        if (localStrategy) {
+                            return await handleLocalWebSearchProxy(anthropicReq, target, res);
                         }
-                        anthropicReq.tools = (anthropicReq.tools || []).filter(t => t.type !== 'web_search_20250305');
-                        console.log('[Proxy] Stripped web_search_20250305 (provider does not support web search)');
+                        if (target.format === 'openai') {
+                            const nativeAvailable = target.supportsWebSearch === true && resolveNativeSearchStrategy(target) !== null;
+                            if (nativeAvailable) {
+                                return await handleWebSearchProxy(anthropicReq, target, res);
+                            }
+                            anthropicReq.tools = (anthropicReq.tools || []).filter(t => t.type !== 'web_search_20250305');
+                            console.log('[Proxy] Stripped web_search_20250305 (provider does not support web search; no local backend configured)');
+                        }
+                        // Anthropic-format with no local backend: leave the tool in — upstream may or may not honor it.
                     }
 
                     if (target.format === 'openai') {
@@ -5234,6 +5475,63 @@ $literal = ConvertTo-HotkeyLiteral $keys
     server.post('/api/computer-use/config', (req, res) => {
         const config = saveComputerUseConfig(req.body || {});
         res.json({ config });
+    });
+
+    // Web search local backend config. Mirrors the computer-use config shape.
+    // GET returns the config with API keys *masked* — never the raw secrets.
+    server.get('/api/web-search/config', (_req, res) => {
+        const cfg = readWebSearchConfig();
+        res.json({
+            config: {
+                provider: cfg.provider,
+                tavilyApiKeyConfigured: Boolean(cfg.tavilyApiKey),
+                braveApiKeyConfigured: Boolean(cfg.braveApiKey),
+            },
+        });
+    });
+
+    server.post('/api/web-search/config', (req, res) => {
+        const incoming = req.body && typeof req.body === 'object' ? req.body : {};
+        const current = readWebSearchConfig();
+        // Preserve existing API keys when the renderer sends '' (unchanged) — same UX as masked inputs.
+        const partial = {
+            provider: typeof incoming.provider === 'string' ? incoming.provider : current.provider,
+            tavilyApiKey: typeof incoming.tavilyApiKey === 'string' && incoming.tavilyApiKey !== ''
+                ? incoming.tavilyApiKey
+                : current.tavilyApiKey,
+            braveApiKey: typeof incoming.braveApiKey === 'string' && incoming.braveApiKey !== ''
+                ? incoming.braveApiKey
+                : current.braveApiKey,
+        };
+        const saved = saveWebSearchConfig(partial);
+        res.json({
+            config: {
+                provider: saved.provider,
+                tavilyApiKeyConfigured: Boolean(saved.tavilyApiKey),
+                braveApiKeyConfigured: Boolean(saved.braveApiKey),
+            },
+        });
+    });
+
+    // Live test: invoke the currently-configured strategy and return the raw results.
+    server.post('/api/web-search/test', async (req, res) => {
+        const query = (req.body && typeof req.body.query === 'string' && req.body.query.trim()) || 'today';
+        const strategy = resolveLocalWebSearchStrategy();
+        if (!strategy) {
+            res.status(400).json({ error: 'no_provider', message: '请先选择并配置一个搜索 provider。' });
+            return;
+        }
+        try {
+            const r = await strategy(query);
+            res.json({
+                query,
+                provider: readWebSearchConfig().provider,
+                results: r.searchResults || [],
+                summary: r.summaryText || '',
+            });
+        } catch (err) {
+            res.status(502).json({ error: 'search_failed', message: err && err.message ? err.message : String(err) });
+        }
     });
 
     server.get('/api/computer-use/session', (_req, res) => {

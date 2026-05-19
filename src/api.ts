@@ -1823,6 +1823,46 @@ export async function updateComputerUseConfig(
   return res.json();
 }
 
+// --- Web search (local backend) ---
+
+export type WebSearchProvider = 'none' | 'duckduckgo' | 'tavily' | 'brave';
+
+export interface WebSearchConfig {
+  provider: WebSearchProvider;
+  tavilyApiKeyConfigured: boolean;
+  braveApiKeyConfigured: boolean;
+}
+
+export async function getWebSearchConfig(): Promise<{ config: WebSearchConfig }> {
+  const res = await request('/web-search/config');
+  return res.json();
+}
+
+export async function updateWebSearchConfig(
+  data: { provider?: WebSearchProvider; tavilyApiKey?: string; braveApiKey?: string },
+): Promise<{ config: WebSearchConfig }> {
+  const res = await request('/web-search/config', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+  return res.json();
+}
+
+export interface WebSearchTestResult {
+  query: string;
+  provider: WebSearchProvider;
+  results: Array<{ title: string; url: string; snippet?: string }>;
+  summary: string;
+}
+
+export async function testWebSearch(query: string): Promise<WebSearchTestResult> {
+  const res = await request('/web-search/test', {
+    method: 'POST',
+    body: JSON.stringify({ query }),
+  });
+  return res.json();
+}
+
 export async function getComputerUseSession(): Promise<{ session: ComputerUseSession }> {
   const res = await request('/computer-use/session');
   return res.json();

@@ -75,6 +75,9 @@ import {
   stopComputerUseSession,
   updateAgentConfig,
   updateComputerUseConfig,
+  getWebSearchConfig,
+  updateWebSearchConfig,
+  testWebSearch,
   createMcpServer,
   deleteMcpServer,
   discoverMcpServerTools,
@@ -85,6 +88,7 @@ import {
   updateUserProfile,
   Project,
 } from '../api';
+import type { WebSearchProvider, WebSearchConfig, WebSearchTestResult } from '../api';
 import ProviderSettings from './ProviderSettings';
 import {
   ChatStyle,
@@ -107,6 +111,7 @@ type PermissionMode = 'workspace_write' | 'project' | 'full_access';
 type SettingsSection =
   | 'general'
   | 'apiConfig'
+  | 'webSearch'
   | 'appearance'
   | 'models'
   | 'personalization'
@@ -507,6 +512,7 @@ const DENSITY_OPTIONS: PickerOption[] = [
 const SETTING_NAV_META: Record<SettingsSection, { label: string; icon: React.ComponentType<{ size?: number; className?: string }>; badge?: string }> = {
   general: { label: '常规', icon: MonitorCog },
   apiConfig: { label: 'API 配置', icon: ServerCog },
+  webSearch: { label: '联网搜索', icon: Globe2 },
   appearance: { label: '外观', icon: Palette },
   models: { label: '模型', icon: Bot },
   personalization: { label: '个性化', icon: UserRound },
@@ -829,6 +835,21 @@ const SettingsPage = ({ onClose }: SettingsPageProps) => {
   const [customApiKey, setCustomApiKey] = useState(localStorage.getItem('CUSTOM_API_KEY') || '');
   const [apiConfigNotice, setApiConfigNotice] = useState('');
   const [apiConfigError, setApiConfigError] = useState('');
+
+  // Web search (local backend) state — config is persisted server-side by bridge-server
+  // at userData/web-search-config.json. The renderer only sees masked API key flags.
+  const [webSearchConfig, setWebSearchConfig] = useState<WebSearchConfig>({
+    provider: 'none',
+    tavilyApiKeyConfigured: false,
+    braveApiKeyConfigured: false,
+  });
+  const [webSearchTavilyKeyDraft, setWebSearchTavilyKeyDraft] = useState('');
+  const [webSearchBraveKeyDraft, setWebSearchBraveKeyDraft] = useState('');
+  const [webSearchTestQuery, setWebSearchTestQuery] = useState('');
+  const [webSearchTestResult, setWebSearchTestResult] = useState<WebSearchTestResult | null>(null);
+  const [webSearchBusy, setWebSearchBusy] = useState<'' | 'saving' | 'testing'>('');
+  const [webSearchNotice, setWebSearchNotice] = useState('');
+  const [webSearchError, setWebSearchError] = useState('');
 
   const [profile, setProfile] = useState<any>(null);
   const [usage, setUsage] = useState<any>(null);
@@ -1199,6 +1220,59 @@ const SettingsPage = ({ onClose }: SettingsPageProps) => {
     document.documentElement.setAttribute('data-chat-font', chatFont);
   }, [chatFont]);
 
+  // Load web search config from bridge-server on mount; refresh when entering the section.
+  useEffect(() => {
+    let cancelled = false;
+    getWebSearchConfig()
+      .then(({ config }) => {
+        if (!cancelled) setWebSearchConfig(config);
+      })
+      .catch(() => { /* bridge-server may not be ready yet; silent */ });
+    return () => { cancelled = true; };
+  }, []);
+
+  const saveWebSearchSettings = async (
+    overrides: { provider?: WebSearchProvider; tavilyApiKey?: string; braveApiKey?: string } = {},
+  ) => {
+    setWebSearchBusy('saving');
+    setWebSearchError('');
+    setWebSearchNotice('');
+    try {
+      const payload: { provider?: WebSearchProvider; tavilyApiKey?: string; braveApiKey?: string } = {
+        provider: overrides.provider ?? webSearchConfig.provider,
+      };
+      const tavilyKey = overrides.tavilyApiKey ?? webSearchTavilyKeyDraft;
+      const braveKey = overrides.braveApiKey ?? webSearchBraveKeyDraft;
+      if (tavilyKey) payload.tavilyApiKey = tavilyKey;
+      if (braveKey) payload.braveApiKey = braveKey;
+      const { config } = await updateWebSearchConfig(payload);
+      setWebSearchConfig(config);
+      if (overrides.tavilyApiKey !== undefined || webSearchTavilyKeyDraft) setWebSearchTavilyKeyDraft('');
+      if (overrides.braveApiKey !== undefined || webSearchBraveKeyDraft) setWebSearchBraveKeyDraft('');
+      setWebSearchNotice('已保存。');
+    } catch (err: any) {
+      setWebSearchError(err?.message || '保存失败');
+    } finally {
+      setWebSearchBusy('');
+    }
+  };
+
+  const runWebSearchTest = async () => {
+    const q = webSearchTestQuery.trim() || '今天的新闻';
+    setWebSearchBusy('testing');
+    setWebSearchError('');
+    setWebSearchNotice('');
+    setWebSearchTestResult(null);
+    try {
+      const result = await testWebSearch(q);
+      setWebSearchTestResult(result);
+    } catch (err: any) {
+      setWebSearchError(err?.message || '搜索失败');
+    } finally {
+      setWebSearchBusy('');
+    }
+  };
+
   useEffect(() => {
     localStorage.setItem(COMPUTER_USE_SEQUENCE_STORAGE_KEY, JSON.stringify(computerUseSequence));
   }, [computerUseSequence]);
@@ -1251,6 +1325,7 @@ const SettingsPage = ({ onClose }: SettingsPageProps) => {
     const items: Array<{ key: SettingsSection; label: string; badge?: string }> = [
       { key: 'general', label: '常规' },
       { key: 'apiConfig', label: 'API 配置' },
+      { key: 'webSearch', label: '联网搜索' },
       { key: 'appearance', label: '外观' },
       ...(isSelfHosted ? [{ key: 'models', label: '模型' as const }] : []),
       { key: 'personalization', label: '个性化' },
@@ -4200,6 +4275,164 @@ const SettingsPage = ({ onClose }: SettingsPageProps) => {
             </div>
           );
         })();
+      case 'webSearch':
+        return (
+          <div className="space-y-5">
+            <SectionCard
+              title="联网搜索"
+              subtitle="在客户端本地跑搜索，绕开上游 API 是否支持 web_search_20250305 的差异。"
+            >
+              <div className="space-y-4">
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                  {[
+                    { value: 'none' as WebSearchProvider, label: '不启用', desc: '保持现状。需要上游 API 自己支持 web_search。' },
+                    { value: 'duckduckgo' as WebSearchProvider, label: 'DuckDuckGo', desc: '零配置、免费。直接解析 DDG Lite 的纯 HTML，对日常查询够用。' },
+                    { value: 'tavily' as WebSearchProvider, label: 'Tavily', desc: '专为 LLM 设计的搜索 API，质量最好。需要 API Key（每月 1000 次免费）。' },
+                    { value: 'brave' as WebSearchProvider, label: 'Brave Search', desc: '需要 API Key（每月 2000 次免费）。' },
+                  ].map((item) => {
+                    const active = webSearchConfig.provider === item.value;
+                    return (
+                      <button
+                        key={item.value}
+                        onClick={() => saveWebSearchSettings({ provider: item.value })}
+                        disabled={webSearchBusy !== ''}
+                        className={`rounded-xl border px-4 py-4 text-left transition-all ${
+                          active
+                            ? 'border-[#2E7CF6]/40 bg-[#2E7CF6]/10'
+                            : 'border-claude-border hover:bg-claude-hover'
+                        } disabled:cursor-not-allowed disabled:opacity-50`}
+                      >
+                        <div className="text-[14px] font-medium text-claude-text">{item.label}</div>
+                        <div className="mt-1 text-[12px] leading-5 text-claude-textSecondary">{item.desc}</div>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {webSearchConfig.provider === 'tavily' && (
+                  <div className="rounded-xl border border-claude-border bg-claude-bg px-4 py-4">
+                    <div className="mb-2 flex items-center justify-between">
+                      <div className="text-[14px] font-medium text-claude-text">Tavily API Key</div>
+                      <div className={`rounded-full px-2.5 py-1 text-[11px] ${webSearchConfig.tavilyApiKeyConfigured ? 'bg-[#7BD88F]/10 text-[#7BD88F]' : 'bg-[#F2C94C]/10 text-[#F2C94C]'}`}>
+                        {webSearchConfig.tavilyApiKeyConfigured ? '已配置' : '未配置'}
+                      </div>
+                    </div>
+                    <div className="mb-3 text-[12px] text-claude-textSecondary">
+                      在 <a href="https://tavily.com" target="_blank" rel="noreferrer" className="text-[#2E7CF6] hover:underline">tavily.com</a> 注册后获取 API Key。
+                    </div>
+                    <div className="grid grid-cols-[1fr_auto] gap-3">
+                      <input
+                        type="password"
+                        value={webSearchTavilyKeyDraft}
+                        onChange={(e) => setWebSearchTavilyKeyDraft(e.target.value)}
+                        placeholder={webSearchConfig.tavilyApiKeyConfigured ? '（已保存，留空不修改）' : 'tvly-...'}
+                        spellCheck={false}
+                        className="rounded-xl border border-claude-border bg-claude-bg px-3 py-2.5 text-[13px] text-claude-text outline-none focus:border-[#2E7CF6]/55"
+                      />
+                      <button
+                        onClick={() => saveWebSearchSettings({ tavilyApiKey: webSearchTavilyKeyDraft })}
+                        disabled={webSearchBusy !== '' || !webSearchTavilyKeyDraft.trim()}
+                        className="rounded-xl bg-claude-text px-4 py-2.5 text-[13px] font-medium text-claude-bg hover:opacity-90 disabled:opacity-50"
+                      >
+                        保存 Key
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {webSearchConfig.provider === 'brave' && (
+                  <div className="rounded-xl border border-claude-border bg-claude-bg px-4 py-4">
+                    <div className="mb-2 flex items-center justify-between">
+                      <div className="text-[14px] font-medium text-claude-text">Brave Search API Key</div>
+                      <div className={`rounded-full px-2.5 py-1 text-[11px] ${webSearchConfig.braveApiKeyConfigured ? 'bg-[#7BD88F]/10 text-[#7BD88F]' : 'bg-[#F2C94C]/10 text-[#F2C94C]'}`}>
+                        {webSearchConfig.braveApiKeyConfigured ? '已配置' : '未配置'}
+                      </div>
+                    </div>
+                    <div className="mb-3 text-[12px] text-claude-textSecondary">
+                      在 <a href="https://brave.com/search/api/" target="_blank" rel="noreferrer" className="text-[#2E7CF6] hover:underline">brave.com/search/api</a> 申请 API Key（Data Free 套餐每月 2000 次免费）。
+                    </div>
+                    <div className="grid grid-cols-[1fr_auto] gap-3">
+                      <input
+                        type="password"
+                        value={webSearchBraveKeyDraft}
+                        onChange={(e) => setWebSearchBraveKeyDraft(e.target.value)}
+                        placeholder={webSearchConfig.braveApiKeyConfigured ? '（已保存，留空不修改）' : 'BSAxxx...'}
+                        spellCheck={false}
+                        className="rounded-xl border border-claude-border bg-claude-bg px-3 py-2.5 text-[13px] text-claude-text outline-none focus:border-[#2E7CF6]/55"
+                      />
+                      <button
+                        onClick={() => saveWebSearchSettings({ braveApiKey: webSearchBraveKeyDraft })}
+                        disabled={webSearchBusy !== '' || !webSearchBraveKeyDraft.trim()}
+                        className="rounded-xl bg-claude-text px-4 py-2.5 text-[13px] font-medium text-claude-bg hover:opacity-90 disabled:opacity-50"
+                      >
+                        保存 Key
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {webSearchConfig.provider !== 'none' && (
+                  <div className="rounded-xl border border-[#2E7CF6]/25 bg-[#2E7CF6]/[0.04] px-4 py-4">
+                    <div className="mb-3 text-[14px] font-medium text-claude-text">测试一下</div>
+                    <div className="grid grid-cols-[1fr_auto] gap-3">
+                      <input
+                        value={webSearchTestQuery}
+                        onChange={(e) => setWebSearchTestQuery(e.target.value)}
+                        placeholder="例如：今天洛杉矶的天气"
+                        spellCheck={false}
+                        className="rounded-xl border border-claude-border bg-claude-bg px-3 py-2.5 text-[13px] text-claude-text outline-none focus:border-[#2E7CF6]/55"
+                      />
+                      <button
+                        onClick={runWebSearchTest}
+                        disabled={webSearchBusy !== ''}
+                        className="rounded-xl border border-claude-border px-4 py-2.5 text-[13px] font-medium text-claude-text hover:bg-claude-hover disabled:opacity-50"
+                      >
+                        {webSearchBusy === 'testing' ? '搜索中…' : '运行搜索'}
+                      </button>
+                    </div>
+                    {webSearchTestResult && (
+                      <div className="mt-4 space-y-2">
+                        <div className="text-[12px] text-claude-textSecondary">
+                          {webSearchTestResult.results.length} 条结果 · provider = {webSearchTestResult.provider}
+                        </div>
+                        <div className="space-y-2">
+                          {webSearchTestResult.results.slice(0, 6).map((r, idx) => (
+                            <div key={idx} className="rounded-lg border border-claude-border bg-claude-bg px-3 py-2">
+                              <div className="text-[13px] font-medium text-claude-text">{r.title || '(no title)'}</div>
+                              <a href={r.url} target="_blank" rel="noreferrer" className="block text-[11px] text-[#2E7CF6] hover:underline truncate">
+                                {r.url}
+                              </a>
+                              {r.snippet && (
+                                <div className="mt-1 text-[12px] leading-5 text-claude-textSecondary line-clamp-3">{r.snippet}</div>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {webSearchError && <div className="text-[12px] text-[#C6613F]">{webSearchError}</div>}
+                {webSearchNotice && <div className="text-[12px] text-[#7BD88F]">{webSearchNotice}</div>}
+              </div>
+            </SectionCard>
+
+            <SectionCard title="工作原理" subtitle="为什么需要这个开关。">
+              <div className="space-y-3 rounded-xl border border-claude-border bg-claude-bg px-4 py-4 text-[13px] leading-6 text-claude-textSecondary">
+                <p>
+                  Anthropic 的 <code>web_search_20250305</code> 是<strong>服务端工具</strong>，由 API 提供方在自己的服务器跑搜索。如果你用的中转站或兼容服务不支持这个工具，模型即使想搜索也拿不到结果。
+                </p>
+                <p>
+                  这里开启后，desktop 会<strong>在本机拦截</strong> web_search 调用，用你选择的 provider 跑一次搜索、把结果直接合成为标准格式回传给模型，不再依赖上游。任何 API 后端都生效。
+                </p>
+                <p>
+                  默认 DuckDuckGo 模式不需要 API Key、零配置、对天气 / 新闻 / 事实查询足够好。需要更高质量结果时换 Tavily 或 Brave。
+                </p>
+              </div>
+            </SectionCard>
+          </div>
+        );
       case 'account':
         return (
           <div className="space-y-5">
