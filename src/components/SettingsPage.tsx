@@ -833,6 +833,7 @@ const SettingsPage = ({ onClose }: SettingsPageProps) => {
   const [apiModeRevision, setApiModeRevision] = useState(0);
   const [customApiBaseUrl, setCustomApiBaseUrl] = useState(localStorage.getItem('CUSTOM_BASE_URL') || DEFAULT_CUSTOM_BASE_URL);
   const [customApiKey, setCustomApiKey] = useState(localStorage.getItem('CUSTOM_API_KEY') || '');
+  const [officialApiKey, setOfficialApiKey] = useState(localStorage.getItem('ANTHROPIC_API_KEY') || '');
   const [apiConfigNotice, setApiConfigNotice] = useState('');
   const [apiConfigError, setApiConfigError] = useState('');
 
@@ -4270,7 +4271,53 @@ const SettingsPage = ({ onClose }: SettingsPageProps) => {
                     </div>
                   </div>
 
-                  {customApiPanel}
+                  {currentMode === 'custom' ? customApiPanel : (
+                    <div className="rounded-xl border border-[#D97757]/25 bg-[#D97757]/[0.04] px-4 py-4">
+                      <div className="mb-3 flex items-center justify-between gap-3">
+                        <div>
+                          <div className="text-[14px] font-medium text-claude-text">官方 Anthropic API 密钥</div>
+                          <div className="mt-1 text-[12px] text-claude-textSecondary">使用 Anthropic Console 创建的 API Key，端点为 https://api.anthropic.com。</div>
+                        </div>
+                        <button
+                          onClick={openAnthropicConsoleKeys}
+                          className="rounded-lg border border-claude-border px-3 py-2 text-[12px] text-claude-textSecondary hover:bg-claude-hover hover:text-claude-text"
+                        >
+                          打开 Console
+                        </button>
+                      </div>
+                      <div className="grid grid-cols-[1fr_auto] gap-3">
+                        <input
+                          value={officialApiKey}
+                          onChange={(e) => setOfficialApiKey(e.target.value)}
+                          placeholder="sk-ant-..."
+                          spellCheck={false}
+                          className="min-w-0 rounded-xl border border-claude-border bg-claude-bg px-3 py-2.5 text-[13px] text-claude-text outline-none focus:border-[#D97757]/55"
+                        />
+                        <button
+                          onClick={() => {
+                            const key = officialApiKey.trim();
+                            if (!key) {
+                              setApiConfigNotice('');
+                              setApiConfigError('请填写 API Key。');
+                              return;
+                            }
+                            localStorage.setItem('ANTHROPIC_API_KEY', key);
+                            localStorage.setItem('ANTHROPIC_BASE_URL', 'https://api.anthropic.com');
+                            localStorage.setItem('user_mode', 'clawparrot');
+                            localStorage.removeItem('cross_mode_overrides');
+                            setApiConfigError('');
+                            setApiConfigNotice('官方 API Key 已保存。');
+                            setApiModeRevision((v) => v + 1);
+                          }}
+                          className="rounded-xl bg-claude-text px-4 py-2.5 text-[13px] font-medium text-claude-bg hover:opacity-90"
+                        >
+                          保存
+                        </button>
+                      </div>
+                      {apiConfigError && <div className="mt-3 text-[12px] text-[#C6613F]">{apiConfigError}</div>}
+                      {apiConfigNotice && <div className="mt-3 text-[12px] text-[#7BD88F]">{apiConfigNotice}</div>}
+                    </div>
+                  )}
                 </div>
               </SectionCard>
 

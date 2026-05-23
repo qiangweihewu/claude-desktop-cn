@@ -8343,7 +8343,7 @@ You have the following skills available. When a user's request matches a skill's
                 console.log('[EnginePool] Engine init event for', convId);
                 return;
             }
-            if (evt.type === 'result') { if (engine.turn) { if (!engine.turn.assistantText && evt.result) engine.turn.assistantText = typeof evt.result === 'string' ? evt.result : ''; finishTurn(engine, convId, conv); } return; }
+            if (evt.type === 'result') { if (engine.turn) { if (!engine.turn.assistantText && evt.result) { engine.turn.assistantText = typeof evt.result === 'string' ? evt.result : ''; if (engine.turn.assistantText && engine.turn.sendSSE) { engine.turn.sendSSE({ type: 'content_block_delta', delta: { type: 'text_delta', text: engine.turn.assistantText } }); } } finishTurn(engine, convId, conv); } return; }
             if (!engine.turn) return;
             handleTurnEvent(engine, convId, conv, evt);
         };

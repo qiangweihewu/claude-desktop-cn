@@ -1129,11 +1129,7 @@ const Sidebar = ({ isCollapsed, toggleSidebar, refreshTrigger, onNewChatClick, o
                 >
                   {userUser?.display_name || userUser?.full_name || userUser?.nickname || '用户'}
                 </div>
-                {localStorage.getItem('user_mode') === 'selfhosted' ? (
-                  <div className="text-[13px] text-claude-textSecondary mt-1 leading-tight">自定义兼容 API</div>
-                ) : (
-                  <div className="text-[13px] text-claude-textSecondary mt-1 leading-tight">官方 Anthropic API</div>
-                )}
+
               </div>
               <ChevronUp size={16} className="text-claude-textSecondary shrink-0 ml-1" />
             </div>

@@ -1243,8 +1243,9 @@ const MessageList = React.memo<MessageListProps>(({
                 );
               })()}
               {loading && idx === messages.length - 1 && !msg.content && !msg.thinking && !msg.searchStatus && normalizeDocumentDrafts(msg).length === 0 && !(msg.toolCalls && msg.toolCalls.length > 0) && (
-                <span className="inline-block ml-1 align-middle" style={{ verticalAlign: 'middle' }}>
+                <span className="inline-flex items-center gap-2 ml-1 align-middle" style={{ verticalAlign: 'middle' }}>
                   <ClaudeLogo breathe style={{ width: '40px', height: '40px', display: 'inline-block' }} />
+                  <span className="text-sm text-[var(--text-tertiary)] animate-pulse">思考中...</span>
                 </span>
               )}
               {loading && idx === messages.length - 1 && !msg.isThinking && (msg.content || (msg.searchStatus && msg.content)) && (
