@@ -8250,11 +8250,18 @@ You have the following skills available. When a user's request matches a skill's
         const elapsedMs = Math.max(1, Date.now() - (turn.startedAt || Date.now()));
         const estimatedTokens = Math.max(1, turn.outputTokens || Math.ceil((turn.assistantText || '').length / 4));
         const ttftMs = turn.firstTokenAt ? Math.max(1, turn.firstTokenAt - (turn.startedAt || turn.firstTokenAt)) : null;
+        // engineInitMs: time from `bun spawn(...)` returning to the engine's
+        // system.init event. Captures Bun cold-start cost; ~0 if the engine
+        // was already warm at turn start.
+        const engineInitMs = (engine.spawnedAt && engine.readyAt && engine.readyAt >= engine.spawnedAt)
+            ? engine.readyAt - engine.spawnedAt
+            : null;
         const responseStats = {
             model: engine.modelId,
             output_tokens: estimatedTokens,
             elapsed_ms: elapsedMs,
             ttft_ms: ttftMs,
+            engine_init_ms: engineInitMs,
             tokens_per_second: Number((estimatedTokens / Math.max(elapsedMs / 1000, 0.001)).toFixed(2)),
         };
         syncProjectTaskExecution(
@@ -8368,6 +8375,7 @@ You have the following skills available. When a user's request matches a skill's
         } else { if (apiKey) envVars.ANTHROPIC_API_KEY = apiKey; envVars.ANTHROPIC_BASE_URL = normalizeBaseUrl(baseUrl || engineEnvVars.ANTHROPIC_BASE_URL || 'https://api.anthropic.com'); }
         console.log('[EnginePool] Spawning persistent engine, conv=' + convId + ' model=' + modelId + ' session=' + (conv.claude_session_id || 'new'));
         const { spawn } = require('child_process');
+        const spawnedAt = Date.now();
         const child = spawn(bunExePath, cliArgs, { cwd: conv.workspace_path, env: envVars, stdio: ['pipe', 'pipe', 'pipe'] });
         let resolveReady;
         const readyPromise = new Promise((resolve) => { resolveReady = resolve; });
@@ -8388,6 +8396,8 @@ You have the following skills available. When a user's request matches a skill's
             ready: false,
             readyPromise,
             resolveReady,
+            spawnedAt,
+            readyAt: null,
         };
         activeChildren.set(convId, child);
 
@@ -8405,8 +8415,9 @@ You have the following skills available. When a user's request matches a skill's
             if (evt.type !== 'stream_event') console.log('[Engine-evt]', evt.type, evt.subtype || '', evt.tool_use_id ? 'tool_id=' + evt.tool_use_id : '');
             if (evt.type === 'system' && evt.subtype === 'init') {
                 engine.ready = true;
+                engine.readyAt = Date.now();
                 if (engine.resolveReady) { try { engine.resolveReady(); } catch (_) {} engine.resolveReady = null; }
-                console.log('[EnginePool] Engine init event for', convId);
+                console.log('[EnginePool] Engine init event for', convId, '| spawnToInit=', engine.spawnedAt ? (engine.readyAt - engine.spawnedAt) + 'ms' : 'n/a');
                 return;
             }
             if (evt.type === 'result') { if (engine.turn) { if (!engine.turn.assistantText && evt.result) { engine.turn.assistantText = typeof evt.result === 'string' ? evt.result : ''; if (engine.turn.assistantText && engine.turn.sendSSE) { engine.turn.sendSSE({ type: 'content_block_delta', delta: { type: 'text_delta', text: engine.turn.assistantText } }); } } finishTurn(engine, convId, conv); } return; }
@@ -8696,25 +8707,32 @@ You have the following skills available. When a user's request matches a skill's
                 engine = null;
             }
             if (!engine) {
-                // Pre-flight ping to upstream. If the gateway returns a hard
-                // error (price not configured, auth, model missing), surface
-                // it within ~1 RTT instead of waiting for engine spawn +
-                // round-trip + exit (~3-10s).
-                const probe = await probeUpstream(config);
-                if (!probe.ok) {
-                    console.warn('[Chat] Aborting before spawn due to probe',
+                // Spawn the engine immediately. The upstream-error probe runs
+                // in parallel: an `await probeUpstream` here used to add 1-2s
+                // to every cold first-message because it issued a full
+                // (1-token) inference call before we even spawned Bun. Now we
+                // do them concurrently and let whichever finishes first drive
+                // the outcome — engine spawn typically wins on healthy
+                // gateways (~0.4s), probe wins on misconfigured gateways
+                // (~1.5s with a clear error), so the user gets the best of
+                // both: fast happy path, fast error path.
+                const sysPrompt = buildChatSystemPrompt(conv, user_mode, user_profile);
+                engine = spawnPersistentEngine(conversation_id, conv, { ...config, sysPrompt, userProfileKey });
+                const engineAtSpawn = engine;
+                probeUpstream(config).then((probe) => {
+                    if (probe.ok) return;
+                    if (enginePool.get(conversation_id) !== engineAtSpawn) return; // engine already replaced/killed
+                    console.warn('[Chat] Async probe failed — killing engine and surfacing error',
                         '| conv=', conversation_id,
                         '| status=', probe.status,
                         '| msg=', (probe.message || '').slice(0, 200));
-                    sendSSE({ type: 'error', error: probe.message });
-                    sendSSE({ type: 'message_stop' });
+                    try { sendSSE({ type: 'error', error: probe.message }); } catch (_) {}
+                    try { sendSSE({ type: 'message_stop' }); } catch (_) {}
                     try { res.end(); } catch (_) {}
                     const stream = activeStreams.get(conversation_id);
                     if (stream) { stream.done = true; }
-                    return;
-                }
-                const sysPrompt = buildChatSystemPrompt(conv, user_mode, user_profile);
-                engine = spawnPersistentEngine(conversation_id, conv, { ...config, sysPrompt, userProfileKey });
+                    killEngine(conversation_id, 'async_probe_failed', { status: probe.status });
+                }).catch(() => {});
             }
             if (!isEngineAlive(engine)) throw new Error('Engine failed to start');
             if (engine.state === 'processing') {
