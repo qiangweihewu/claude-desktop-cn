@@ -425,8 +425,47 @@ const ProviderSettings: React.FC = () => {
     localStorage.setItem('default_model', id);
   };
 
+  const hasAnyProvider = providerList.length > 0;
+  const hasAnyTierAssigned = chatModels.some(cm => cm.tier && cm.tier !== 'extra');
+  const onboardingActive = !hasAnyProvider || !hasAnyTierAssigned;
+
   return (
     <div>
+      {onboardingActive && (
+        <div className="mb-6 rounded-[14px] border border-[#387ee0]/30 bg-[#387ee0]/[0.04] px-5 py-4 animate-fade-in">
+          <div className="flex items-center gap-2 mb-3">
+            <span className="text-[14px] font-semibold text-claude-text">怎么用这个页面？</span>
+            <span className="text-[11px] text-claude-textSecondary/70">三步：先连一个供应商，再选要用的模型，最后把模型挂到 Opus / Sonnet / Haiku 三个档位。</span>
+          </div>
+          <ol className="space-y-2 text-[12.5px] leading-6 text-claude-textSecondary">
+            <li className="flex gap-2.5">
+              <span className="flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full bg-[#387ee0]/15 text-[11px] font-semibold text-[#387ee0]">1</span>
+              <div>
+                <span className="text-claude-text">下方「模型供应商」区域点 + 添加</span>。填中转站 / 第三方厂商的 <code className="rounded bg-claude-input/80 px-1 py-0.5 text-[11.5px]">API 地址</code> 和 <code className="rounded bg-claude-input/80 px-1 py-0.5 text-[11.5px]">API Key</code> 就行。例：
+                <code className="ml-1 rounded bg-claude-input/80 px-1 py-0.5 text-[11.5px]">https://api.anthropic.com</code>、
+                <code className="ml-1 rounded bg-claude-input/80 px-1 py-0.5 text-[11.5px]">https://api.openai.com</code>、
+                <code className="ml-1 rounded bg-claude-input/80 px-1 py-0.5 text-[11.5px]">https://api.deepseek.com</code>。
+              </div>
+            </li>
+            <li className="flex gap-2.5">
+              <span className="flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full bg-[#387ee0]/15 text-[11px] font-semibold text-[#387ee0]">2</span>
+              <div>
+                添加成功后右侧会列出该供应商的模型。<span className="text-claude-text">把要在聊天里用的模型勾上</span>。如果列表为空，可以手动加上你中转站支持的模型 ID（比如 <code className="rounded bg-claude-input/80 px-1 py-0.5 text-[11.5px]">claude-sonnet-4-6</code>、<code className="rounded bg-claude-input/80 px-1 py-0.5 text-[11.5px]">gpt-4o</code>）。
+              </div>
+            </li>
+            <li className="flex gap-2.5">
+              <span className="flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full bg-[#387ee0]/15 text-[11px] font-semibold text-[#387ee0]">3</span>
+              <div>
+                回到上方「对话模型」区域，用下拉框把模型<span className="text-claude-text">分配到 Opus / Sonnet / Haiku 三个档位</span>。聊天页右下角下拉框选模型时，就是从这三档里选。多余的模型会自动放进「More models」。
+              </div>
+            </li>
+          </ol>
+          <div className="mt-3 text-[11.5px] text-claude-textSecondary/70">
+            没分配档位也能用 —— 聊天页会回退到默认的 <code className="rounded bg-claude-input/80 px-1 py-0.5">claude-sonnet-4-6</code> 等原生模型 ID 直接发给中转站；只有当你的中转站不识别原生 ID（比如重命名过）才必须配档位。
+          </div>
+        </div>
+      )}
+
       {/* ===== Chat Models Section ===== */}
       <div className="relative z-50 mb-10 animate-fade-in">
         <h3 className="text-[16px] font-semibold text-claude-text mb-1">对话模型</h3>
@@ -539,7 +578,8 @@ const ProviderSettings: React.FC = () => {
       <hr className="border-claude-border/40 mb-6" />
 
       {/* ===== Provider Management ===== */}
-      <h3 className="text-[16px] font-semibold text-claude-text mb-4">模型供应商</h3>
+      <h3 className="text-[16px] font-semibold text-claude-text mb-1">模型供应商</h3>
+      <p className="text-[12px] text-claude-textSecondary/60 mb-4">每个供应商对应一个 Base URL + API Key 组合。添加后可以勾选要在聊天里出现的模型，然后回到上方「对话模型」分配档位。</p>
       <div className="flex gap-6 min-h-[400px] animate-fade-in">
         {/* Left: Provider list */}
         <div className="w-[240px] flex-shrink-0 flex flex-col gap-2">
@@ -598,24 +638,35 @@ const ProviderSettings: React.FC = () => {
           {/* Quick add dialog */}
           {showAdd && (
             <div className="mb-6 p-5 rounded-[16px] border border-claude-border bg-claude-input shadow-sm">
-              <div className="text-[15px] font-medium text-claude-text mb-4">添加模型供应商</div>
+              <div className="text-[15px] font-medium text-claude-text mb-1">添加模型供应商</div>
+              <div className="text-[12px] text-claude-textSecondary/70 mb-4">填中转站或第三方 LLM 厂商的 Base URL 和 API Key。填了 URL 之后会自动识别厂商并预填常用模型。</div>
               <div className="space-y-3">
-                <input
-                  type="text"
-                  value={newUrl}
-                  onChange={e => setNewUrl(e.target.value)}
-                  placeholder="API 地址（如 https://api.openai.com）"
-                  className="w-full bg-transparent border border-claude-border rounded-[8px] px-3 py-2.5 text-[14px] text-claude-text outline-none focus:border-[#387ee0]/60 transition-colors placeholder:text-claude-textSecondary/40"
-                  autoFocus
-                />
-                <input
-                  type="password"
-                  value={newKey}
-                  onChange={e => setNewKey(e.target.value)}
-                  placeholder="API Key"
-                  className="w-full bg-transparent border border-claude-border rounded-[8px] px-3 py-2.5 text-[14px] text-claude-text outline-none focus:border-[#387ee0]/60 transition-colors placeholder:text-claude-textSecondary/40"
-                  onKeyDown={e => { if (e.key === 'Enter') handleQuickAdd(); }}
-                />
+                <div>
+                  <input
+                    type="text"
+                    value={newUrl}
+                    onChange={e => setNewUrl(e.target.value)}
+                    placeholder="API 地址，例如 https://api.openai.com 或 https://api.deepseek.com"
+                    className="w-full bg-transparent border border-claude-border rounded-[8px] px-3 py-2.5 text-[14px] text-claude-text outline-none focus:border-[#387ee0]/60 transition-colors placeholder:text-claude-textSecondary/40"
+                    autoFocus
+                  />
+                  <div className="mt-1 text-[11px] text-claude-textSecondary/60">
+                    根域名就行，不用带 <code className="rounded bg-claude-bg px-1">/v1</code>。Anthropic 原版填 <code className="rounded bg-claude-bg px-1">https://api.anthropic.com</code>。
+                  </div>
+                </div>
+                <div>
+                  <input
+                    type="password"
+                    value={newKey}
+                    onChange={e => setNewKey(e.target.value)}
+                    placeholder="API Key（sk-… 或厂商分发的密钥）"
+                    className="w-full bg-transparent border border-claude-border rounded-[8px] px-3 py-2.5 text-[14px] text-claude-text outline-none focus:border-[#387ee0]/60 transition-colors placeholder:text-claude-textSecondary/40"
+                    onKeyDown={e => { if (e.key === 'Enter') handleQuickAdd(); }}
+                  />
+                  <div className="mt-1 text-[11px] text-claude-textSecondary/60">
+                    本地明文保存在你电脑上，不会上传任何外部服务。
+                  </div>
+                </div>
                 {newUrl.trim() && (() => {
                   const det = detectProvider(newUrl.trim());
                   return det ? (
@@ -918,11 +969,12 @@ const ProviderSettings: React.FC = () => {
               </div>
             );
           })() : !showAdd && (
-            <div className="flex flex-col items-center justify-center h-full text-claude-textSecondary/40">
-              <div className="text-[14px] mb-2">还没有配置供应商</div>
+            <div className="flex flex-col items-center justify-center h-full text-center px-6">
+              <div className="text-[14px] text-claude-textSecondary mb-1">还没有配置供应商</div>
+              <div className="text-[12px] text-claude-textSecondary/55 max-w-[280px] mb-4">点击下面的按钮添加你的第一个 LLM 供应商。中转站、官方 Anthropic、OpenAI、DeepSeek 之类都行。</div>
               <button
                 onClick={() => setShowAdd(true)}
-                className="text-[13px] text-claude-textSecondary hover:text-claude-text transition-colors"
+                className="px-4 py-2 rounded-lg border border-[#387ee0]/40 bg-[#387ee0]/5 text-[13px] text-[#387ee0] font-medium hover:bg-[#387ee0]/10 transition-colors"
               >
                 + 添加第一个供应商
               </button>
