@@ -2226,12 +2226,18 @@ const SettingsPage = ({ onClose }: SettingsPageProps) => {
   };
 
   const currentSection = (() => {
+    const apiConfigStatus = (apiConfigError || apiConfigNotice) ? (
+      <div className="space-y-1">
+        {apiConfigError && <div className="text-[12px] text-[#C6613F]">{apiConfigError}</div>}
+        {apiConfigNotice && <div className="text-[12px] text-[#7BD88F]">{apiConfigNotice}</div>}
+      </div>
+    ) : null;
     const customApiPanel = (
       <div className="rounded-xl border border-[#2E7CF6]/25 bg-[#2E7CF6]/[0.04] px-4 py-4">
         <div className="mb-3 flex items-center justify-between gap-3">
           <div>
-            <div className="text-[14px] font-medium text-claude-text">更换自定义兼容 API</div>
-            <div className="mt-1 text-[12px] text-claude-textSecondary">保存后会立即切换到自定义兼容 API 模式。</div>
+            <div className="text-[14px] font-medium text-claude-text">自定义兼容 API 配置</div>
+            <div className="mt-1 text-[12px] text-claude-textSecondary">填写 Base URL 和 API Key，保存后会立即切换到自定义兼容 API 模式。</div>
           </div>
           <button
             onClick={openApiSetupPage}
@@ -2262,8 +2268,51 @@ const SettingsPage = ({ onClose }: SettingsPageProps) => {
             保存并切换
           </button>
         </div>
-        {apiConfigError && <div className="mt-3 text-[12px] text-[#C6613F]">{apiConfigError}</div>}
-        {apiConfigNotice && <div className="mt-3 text-[12px] text-[#7BD88F]">{apiConfigNotice}</div>}
+      </div>
+    );
+    const officialKeyPanel = (
+      <div className="rounded-xl border border-[#D97757]/25 bg-[#D97757]/[0.04] px-4 py-4">
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <div>
+            <div className="text-[14px] font-medium text-claude-text">官方 Anthropic API 密钥</div>
+            <div className="mt-1 text-[12px] text-claude-textSecondary">使用 Anthropic Console 创建的 API Key，端点为 https://api.anthropic.com。</div>
+          </div>
+          <button
+            onClick={openAnthropicConsoleKeys}
+            className="rounded-lg border border-claude-border px-3 py-2 text-[12px] text-claude-textSecondary hover:bg-claude-hover hover:text-claude-text"
+          >
+            打开 Console
+          </button>
+        </div>
+        <div className="grid grid-cols-[1fr_auto] gap-3">
+          <input
+            value={officialApiKey}
+            onChange={(e) => setOfficialApiKey(e.target.value)}
+            placeholder="sk-ant-..."
+            spellCheck={false}
+            className="min-w-0 rounded-xl border border-claude-border bg-claude-bg px-3 py-2.5 text-[13px] text-claude-text outline-none focus:border-[#D97757]/55"
+          />
+          <button
+            onClick={() => {
+              const key = officialApiKey.trim();
+              if (!key) {
+                setApiConfigNotice('');
+                setApiConfigError('请填写 API Key。');
+                return;
+              }
+              localStorage.setItem('ANTHROPIC_API_KEY', key);
+              localStorage.setItem('ANTHROPIC_BASE_URL', 'https://api.anthropic.com');
+              localStorage.setItem('user_mode', 'clawparrot');
+              localStorage.removeItem('cross_mode_overrides');
+              setApiConfigError('');
+              setApiConfigNotice('官方 API Key 已保存，并已切换到官方 Anthropic API。');
+              setApiModeRevision((v) => v + 1);
+            }}
+            className="rounded-xl bg-claude-text px-4 py-2.5 text-[13px] font-medium text-claude-bg hover:opacity-90"
+          >
+            保存并切换
+          </button>
+        </div>
       </div>
     );
     switch (section) {
@@ -2383,8 +2432,9 @@ const SettingsPage = ({ onClose }: SettingsPageProps) => {
                 })}
               </div>
               {(localStorage.getItem('user_mode') || 'selfhosted') === 'selfhosted' && (
-                <div className="mt-4">
+                <div className="mt-4 space-y-3">
                   {customApiPanel}
+                  {apiConfigStatus}
                 </div>
               )}
             </SectionCard>
@@ -4234,7 +4284,7 @@ const SettingsPage = ({ onClose }: SettingsPageProps) => {
                         disabled={!customConfigured && currentMode !== 'custom'}
                         className="mt-3 w-full rounded-lg border border-claude-border px-3 py-2 text-[12px] text-claude-text hover:bg-claude-hover disabled:cursor-not-allowed disabled:opacity-45"
                       >
-                        {currentMode === 'custom' ? '当前模式' : customConfigured ? '切换到自定义 API' : '先填写下方配置'}
+                        {currentMode === 'custom' ? '当前模式' : customConfigured ? '切换到自定义 API' : '在下方填写并保存'}
                       </button>
                     </div>
 
@@ -4271,53 +4321,20 @@ const SettingsPage = ({ onClose }: SettingsPageProps) => {
                     </div>
                   </div>
 
-                  {currentMode === 'custom' ? customApiPanel : (
-                    <div className="rounded-xl border border-[#D97757]/25 bg-[#D97757]/[0.04] px-4 py-4">
-                      <div className="mb-3 flex items-center justify-between gap-3">
-                        <div>
-                          <div className="text-[14px] font-medium text-claude-text">官方 Anthropic API 密钥</div>
-                          <div className="mt-1 text-[12px] text-claude-textSecondary">使用 Anthropic Console 创建的 API Key，端点为 https://api.anthropic.com。</div>
-                        </div>
-                        <button
-                          onClick={openAnthropicConsoleKeys}
-                          className="rounded-lg border border-claude-border px-3 py-2 text-[12px] text-claude-textSecondary hover:bg-claude-hover hover:text-claude-text"
-                        >
-                          打开 Console
-                        </button>
-                      </div>
-                      <div className="grid grid-cols-[1fr_auto] gap-3">
-                        <input
-                          value={officialApiKey}
-                          onChange={(e) => setOfficialApiKey(e.target.value)}
-                          placeholder="sk-ant-..."
-                          spellCheck={false}
-                          className="min-w-0 rounded-xl border border-claude-border bg-claude-bg px-3 py-2.5 text-[13px] text-claude-text outline-none focus:border-[#D97757]/55"
-                        />
-                        <button
-                          onClick={() => {
-                            const key = officialApiKey.trim();
-                            if (!key) {
-                              setApiConfigNotice('');
-                              setApiConfigError('请填写 API Key。');
-                              return;
-                            }
-                            localStorage.setItem('ANTHROPIC_API_KEY', key);
-                            localStorage.setItem('ANTHROPIC_BASE_URL', 'https://api.anthropic.com');
-                            localStorage.setItem('user_mode', 'clawparrot');
-                            localStorage.removeItem('cross_mode_overrides');
-                            setApiConfigError('');
-                            setApiConfigNotice('官方 API Key 已保存。');
-                            setApiModeRevision((v) => v + 1);
-                          }}
-                          className="rounded-xl bg-claude-text px-4 py-2.5 text-[13px] font-medium text-claude-bg hover:opacity-90"
-                        >
-                          保存
-                        </button>
-                      </div>
-                      {apiConfigError && <div className="mt-3 text-[12px] text-[#C6613F]">{apiConfigError}</div>}
-                      {apiConfigNotice && <div className="mt-3 text-[12px] text-[#7BD88F]">{apiConfigNotice}</div>}
-                    </div>
-                  )}
+                  <div className="space-y-3">
+                    {currentMode === 'official' ? (
+                      <>
+                        {officialKeyPanel}
+                        {customApiPanel}
+                      </>
+                    ) : (
+                      <>
+                        {customApiPanel}
+                        {officialKeyPanel}
+                      </>
+                    )}
+                    {apiConfigStatus}
+                  </div>
                 </div>
               </SectionCard>
 
