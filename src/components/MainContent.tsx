@@ -2037,7 +2037,14 @@ const MainContent = ({ onNewChat, resetKey, tunerConfig, onOpenDocument, onArtif
           }
         }).catch(() => {});
       } else {
-        setLoading(false);
+        // streamingSet is a module-level singleton (survives remount via
+        // <MainContent key={pathname}>), so if the previous instance flagged
+        // an in-flight stream for this conv we can show the 思考中 indicator
+        // immediately — without waiting for /stream-status to round-trip.
+        // Covers the first-message-after-new-chat case: the old MainContent
+        // called addStreaming() right before navigate triggered the remount.
+        const initialStreaming = isStreaming(activeId);
+        setLoading(initialStreaming);
         loadConversation(activeId);
         // Check if server has an active stream we can reconnect to
         const convId = activeId;
@@ -2361,7 +2368,17 @@ const MainContent = ({ onNewChat, resetKey, tunerConfig, onOpenDocument, onArtif
         }
         return sanitizeInlineArtifactMessage(msg);
       });
-      setMessages(normalizedMessages);
+      // If the previous MainContent instance kicked off a stream for this
+      // conv (e.g. user just sent the first message in a new chat and the
+      // route change remounted us), eagerly add an assistant placeholder.
+      // Without it the indicator-render condition at the bottom of the
+      // message list never matches and the user sees a blank screen for the
+      // first 5s while the engine spawns.
+      const finalMessages = isStreaming(conversationId)
+        && (normalizedMessages.length === 0 || normalizedMessages[normalizedMessages.length - 1].role !== 'assistant')
+        ? [...normalizedMessages, { role: 'assistant', content: '' }]
+        : normalizedMessages;
+      setMessages(finalMessages);
       isAtBottomRef.current = true;
       scheduleScrollToBottomAfterRender();
       setConversationTitle(data.title || 'New Chat');
