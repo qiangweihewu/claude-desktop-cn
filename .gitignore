@@ -31,6 +31,9 @@ engine/node_modules/
 # engine/.env is committed (no secrets, only public config)
 engine/bun.lockb
 
+# Engine bundle (produced by scripts/build-engine.sh, shipped via extraResources)
+engine/dist/
+
 # Editor
 .vscode/*
 !.vscode/extensions.json

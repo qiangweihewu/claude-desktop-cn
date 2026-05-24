@@ -56,6 +56,9 @@ jobs:
         run: |
           node -e "const fs=require('fs'); const secrets={}; if(process.env.GH_OAUTH_CLIENT_ID) secrets.GITHUB_CLIENT_ID=process.env.GH_OAUTH_CLIENT_ID; if(process.env.GH_OAUTH_CLIENT_SECRET) secrets.GITHUB_CLIENT_SECRET=process.env.GH_OAUTH_CLIENT_SECRET; fs.writeFileSync('electron/secrets.json', JSON.stringify(secrets,null,2)); console.log('secrets.json written, keys:', Object.keys(secrets));"
 
+      - name: Build engine bundle
+        run: npm run build:engine
+
       - name: Build frontend
         run: npm run build
 
@@ -113,6 +116,9 @@ jobs:
           GH_OAUTH_CLIENT_SECRET: ${{ secrets.GH_OAUTH_CLIENT_SECRET }}
         run: |
           node -e "const fs=require('fs'); const secrets={}; if(process.env.GH_OAUTH_CLIENT_ID) secrets.GITHUB_CLIENT_ID=process.env.GH_OAUTH_CLIENT_ID; if(process.env.GH_OAUTH_CLIENT_SECRET) secrets.GITHUB_CLIENT_SECRET=process.env.GH_OAUTH_CLIENT_SECRET; fs.writeFileSync('electron/secrets.json', JSON.stringify(secrets,null,2)); console.log('secrets.json written, keys:', Object.keys(secrets));"
+
+      - name: Build engine bundle
+        run: npm run build:engine
 
       - name: Build frontend
         run: npm run build

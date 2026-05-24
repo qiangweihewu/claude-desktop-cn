@@ -3429,8 +3429,7 @@ if __name__ == "__main__":
             // Spawn engine CLI with /compact as the prompt 鈥?engine handles the full compaction internally
             const compactPrompt = instruction ? `/compact ${instruction}` : '/compact';
             const cliArgs = [
-                '--preload', enginePreload,
-                '--env-file=' + engineEnv, engineCli,
+                ...engineCliArgs(),
                 '-p', compactPrompt,
                 '--output-format', 'stream-json',
                 '--verbose',
@@ -7709,6 +7708,19 @@ You have the following skills available. When a user's request matches a skill's
         : path.join(__dirname, '..', 'engine');
     const engineCli = path.join(engineDir, 'src', 'entrypoints', 'cli.tsx');
     const engineEnv = path.join(engineDir, '.env');
+    const engineBundle = path.join(engineDir, 'dist', 'cli.js');
+    const engineBundleAvailable = fs.existsSync(engineBundle);
+    console.log('[Engine] bundle:', engineBundle, '| available:', engineBundleAvailable);
+    // Returns the CLI portion of spawn args. When the prebuilt bundle is
+    // available we skip --preload (the bundle has bun:bundle features
+    // already DCE'd) and the .ts entrypoint to avoid Bun JIT-compiling
+    // ~1900 source files on every spawn. Cuts engine cold start by several
+    // seconds on packaged installs. --env-file stays so the engine still
+    // picks up ANTHROPIC_*_MODEL defaults, DISABLE_TELEMETRY, etc.
+    function engineCliArgs() {
+        if (engineBundleAvailable) return ['--env-file=' + engineEnv, engineBundle];
+        return ['--preload', enginePreload, '--env-file=' + engineEnv, engineCli];
+    }
 
     // Resolve Bun executable: bundled 鈫?user-installed 鈫?PATH
     function findBunExe() {
@@ -8266,7 +8278,7 @@ You have the following skills available. When a user's request matches a skill's
         const { modelId, apiKey, baseUrl, apiFormat, sysPrompt } = config;
         evictOldestEngine();
         const claudeDir = path.join(os.homedir(), '.claude');
-        const cliArgs = ['--preload', enginePreload, '--env-file=' + engineEnv, engineCli, '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--include-partial-messages', '--permission-mode', 'bypassPermissions', '--permission-prompt-tool', 'stdio', '--add-dir', claudeDir, '--model', modelId];
+        const cliArgs = [...engineCliArgs(), '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--include-partial-messages', '--permission-mode', 'bypassPermissions', '--permission-prompt-tool', 'stdio', '--add-dir', claudeDir, '--model', modelId];
         if (conv.claude_session_id) {
             cliArgs.push('--resume', conv.claude_session_id);
             // If a delete/edit/regenerate queued a rewind point, slice the resumed

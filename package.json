@@ -1,7 +1,7 @@
 {
   "name": "claude-desktop",
   "private": true,
-  "version": "1.6.44",
+  "version": "1.6.45",
   "description": "Claude Desktop - AI assistant with native capabilities",
   "author": {
     "name": "Qiao-920",
@@ -17,11 +17,12 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "electron:dev": "vite build && electron .",
-    "electron:build": "vite build && electron-builder",
-    "electron:build:win": "vite build && electron-builder --win",
-    "electron:build:mac": "vite build && electron-builder --mac",
-    "electron:build:linux": "vite build && electron-builder --linux"
+    "build:engine": "bash scripts/build-engine.sh",
+    "electron:dev": "npm run build:engine && vite build && electron .",
+    "electron:build": "npm run build:engine && vite build && electron-builder",
+    "electron:build:win": "npm run build:engine && vite build && electron-builder --win",
+    "electron:build:mac": "npm run build:engine && vite build && electron-builder --mac",
+    "electron:build:linux": "npm run build:engine && vite build && electron-builder --linux"
   },
   "build": {
     "appId": "com.claude.desktop",
@@ -47,6 +48,10 @@
           "**/*.md",
           "**/*.txt"
         ]
+      },
+      {
+        "from": "engine/dist",
+        "to": "engine/dist"
       },
       {
         "from": "engine/bin",
