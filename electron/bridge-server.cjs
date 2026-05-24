@@ -7722,6 +7722,48 @@ You have the following skills available. When a user's request matches a skill's
         return ['--preload', enginePreload, '--env-file=' + engineEnv, engineCli];
     }
 
+    // --bare skips hooks, plugin sync, CLAUDE.md auto-discovery, keychain reads,
+    // background prefetches — drops engine setup from ~4s to ~0.5s. Safe for our
+    // desktop chat use case: we never use file-system hooks, the API key comes
+    // from --env-file, system prompt is passed via --append-system-prompt, and
+    // MCP servers (if any) get wired explicitly below.
+    // Writes our mcp-servers.json into the engine's expected schema (mcpServers
+    // map). Returns the config file path, or null if there are no enabled
+    // servers. The engine reads --mcp-config <path> with --strict-mcp-config
+    // so it ONLY uses what we hand it, skipping the default ~/.claude.json
+    // auto-discovery that --bare disables.
+    const engineMcpConfigPath = path.join(userDataPath, 'engine-mcp-config.json');
+    function writeEngineMcpConfig() {
+        try {
+            const raw = readJsonFile(mcpServersPath, []);
+            if (!Array.isArray(raw)) return null;
+            const enabled = raw.filter((s) => s && s.enabled !== false);
+            if (enabled.length === 0) return null;
+            const mcpServers = {};
+            for (const s of enabled) {
+                const name = (s.name && String(s.name).trim()) || s.id;
+                if (!name) continue;
+                if (s.type === 'http') {
+                    if (!s.url) continue;
+                    mcpServers[name] = { type: 'http', url: s.url };
+                } else {
+                    if (!s.command) continue;
+                    mcpServers[name] = {
+                        command: s.command,
+                        args: Array.isArray(s.args) ? s.args : [],
+                        env: s.env && typeof s.env === 'object' ? s.env : {},
+                    };
+                }
+            }
+            if (Object.keys(mcpServers).length === 0) return null;
+            fs.writeFileSync(engineMcpConfigPath, JSON.stringify({ mcpServers }, null, 2));
+            return engineMcpConfigPath;
+        } catch (e) {
+            console.warn('[Engine] writeEngineMcpConfig failed:', e.message);
+            return null;
+        }
+    }
+
     // Resolve Bun executable: bundled 鈫?user-installed 鈫?PATH
     function findBunExe() {
         const bundled = path.join(engineDir, 'bin', process.platform === 'win32' ? 'bun.exe' : 'bun');
@@ -8278,7 +8320,11 @@ You have the following skills available. When a user's request matches a skill's
         const { modelId, apiKey, baseUrl, apiFormat, sysPrompt } = config;
         evictOldestEngine();
         const claudeDir = path.join(os.homedir(), '.claude');
-        const cliArgs = [...engineCliArgs(), '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--include-partial-messages', '--permission-mode', 'bypassPermissions', '--permission-prompt-tool', 'stdio', '--add-dir', claudeDir, '--model', modelId];
+        const cliArgs = [...engineCliArgs(), '--bare', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--include-partial-messages', '--permission-mode', 'bypassPermissions', '--permission-prompt-tool', 'stdio', '--add-dir', claudeDir, '--model', modelId];
+        const mcpConfigFile = writeEngineMcpConfig();
+        if (mcpConfigFile) {
+            cliArgs.push('--mcp-config', mcpConfigFile, '--strict-mcp-config');
+        }
         if (conv.claude_session_id) {
             cliArgs.push('--resume', conv.claude_session_id);
             // If a delete/edit/regenerate queued a rewind point, slice the resumed
