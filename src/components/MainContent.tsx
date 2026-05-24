@@ -1212,6 +1212,7 @@ const MessageList = React.memo<MessageListProps>(({
                 const modelBadge = formatModelBadge(stats.model || msg.model || currentModelString);
                 const tokenText = stats.output_tokens ? `${stats.output_tokens.toLocaleString()} tokens` : '';
                 const elapsedText = formatElapsedMs(stats.elapsed_ms);
+                const ttftText = stats.ttft_ms ? formatElapsedMs(stats.ttft_ms) : '';
                 const speedText = formatTokensPerSecond(stats.tokens_per_second);
                 return (
                   <div className="flex flex-wrap items-center gap-1.5 mt-3 mb-1 text-claude-textSecondary" style={{ fontSize: 'var(--chat-metadata-font-size)' }}>
@@ -1225,6 +1226,12 @@ const MessageList = React.memo<MessageListProps>(({
                       <span className="inline-flex items-center gap-1.5 h-6 px-2 rounded-md border border-claude-border bg-claude-input/70">
                         <Info size={12} />
                         {tokenText}
+                      </span>
+                    )}
+                    {ttftText && (
+                      <span className="inline-flex items-center gap-1.5 h-6 px-2 rounded-md border border-claude-border bg-claude-input/70" title={uiLanguage === 'zh-CN' ? '首 token 耗时（从请求发出到第一个字到达）' : 'Time to first token'}>
+                        <Clock size={12} />
+                        {uiLanguage === 'zh-CN' ? `首 token ${ttftText}` : `TTFT ${ttftText}`}
                       </span>
                     )}
                     {elapsedText && (
@@ -2477,15 +2484,21 @@ const MainContent = ({ onNewChat, resetKey, tunerConfig, onOpenDocument, onArtif
             }
           }, 1500);
         } else {
-          setLoading(false);
+          // Don't clobber loading=true when an in-session stream is in flight.
+          // generation-status only knows about long-running background jobs; for
+          // a fresh first-message send from this app, isStreaming() is the
+          // authoritative signal that we're still waiting on the engine.
+          if (!isStreaming(conversationId)) setLoading(false);
         }
       } catch {
-        // generation-status 接口失败不影响正常加载
-        setLoading(false);
+        // generation-status endpoint isn't implemented on this fork — every
+        // call 404s and lands here. Same guard as the else branch: preserve
+        // loading=true while an in-session stream is mid-flight.
+        if (!isStreaming(conversationId)) setLoading(false);
       }
     } catch (err) {
       console.error(err);
-      setLoading(false);
+      if (!isStreaming(conversationId)) setLoading(false);
     }
   };
 

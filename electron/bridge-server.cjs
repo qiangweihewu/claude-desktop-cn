@@ -8139,8 +8139,14 @@ You have the following skills available. When a user's request matches a skill's
         if (evt.type === 'stream_event' && evt.event) {
             var se = evt.event;
             if (se.type === 'content_block_delta') {
-                if (se.delta && se.delta.type === 'text_delta') { turn.assistantText += se.delta.text; turn.pendingWorkText += se.delta.text; sendSSE({ type: 'content_block_delta', delta: { type: 'text_delta', text: se.delta.text } }); }
-                else if (se.delta && se.delta.type === 'thinking_delta') { turn.thinkingText += se.delta.thinking; sendSSE({ type: 'content_block_delta', delta: { type: 'thinking_delta', thinking: se.delta.thinking } }); }
+                if (se.delta && se.delta.type === 'text_delta') {
+                    if (!turn.firstTokenAt) turn.firstTokenAt = Date.now();
+                    turn.assistantText += se.delta.text; turn.pendingWorkText += se.delta.text; sendSSE({ type: 'content_block_delta', delta: { type: 'text_delta', text: se.delta.text } });
+                }
+                else if (se.delta && se.delta.type === 'thinking_delta') {
+                    if (!turn.firstTokenAt) turn.firstTokenAt = Date.now();
+                    turn.thinkingText += se.delta.thinking; sendSSE({ type: 'content_block_delta', delta: { type: 'thinking_delta', thinking: se.delta.thinking } });
+                }
             } else if (se.type === 'message_delta' && se.usage && se.usage.output_tokens != null) {
                 turn.outputTokens = Math.max(turn.outputTokens || 0, Number(se.usage.output_tokens) || 0);
             } else if (se.type === 'content_block_start' && se.content_block && se.content_block.type === 'tool_use') {
@@ -8243,10 +8249,12 @@ You have the following skills available. When a user's request matches a skill's
         engine.turn = null; engine.state = 'idle';
         const elapsedMs = Math.max(1, Date.now() - (turn.startedAt || Date.now()));
         const estimatedTokens = Math.max(1, turn.outputTokens || Math.ceil((turn.assistantText || '').length / 4));
+        const ttftMs = turn.firstTokenAt ? Math.max(1, turn.firstTokenAt - (turn.startedAt || turn.firstTokenAt)) : null;
         const responseStats = {
             model: engine.modelId,
             output_tokens: estimatedTokens,
             elapsed_ms: elapsedMs,
+            ttft_ms: ttftMs,
             tokens_per_second: Number((estimatedTokens / Math.max(elapsedMs / 1000, 0.001)).toFixed(2)),
         };
         syncProjectTaskExecution(
