@@ -831,6 +831,38 @@ const SettingsPage = ({ onClose }: SettingsPageProps) => {
   const [integratedShell, setIntegratedShell] = useState(localStorage.getItem('integrated_shell') || 'powershell');
   const [permissionMode, setPermissionMode] = useState<PermissionMode>('full_access');
   const [apiModeRevision, setApiModeRevision] = useState(0);
+  const [appVersion, setAppVersion] = useState('');
+  const [updateCheckState, setUpdateCheckState] = useState<{ status: 'idle' | 'checking' | 'latest' | 'available' | 'error'; latestVersion?: string; message?: string }>({ status: 'idle' });
+  useEffect(() => {
+    const api = (window as any).electronAPI;
+    api?.getAppVersion?.().then((v: string) => setAppVersion(v || '')).catch(() => {});
+  }, []);
+  const runUpdateCheck = async () => {
+    const api = (window as any).electronAPI;
+    if (!api?.checkForUpdates) {
+      setUpdateCheckState({ status: 'error', message: '当前环境不支持自动更新' });
+      return;
+    }
+    setUpdateCheckState({ status: 'checking' });
+    try {
+      const result = await api.checkForUpdates();
+      if (!result?.ok) {
+        if (result?.reason === 'disabled') {
+          setUpdateCheckState({ status: 'error', message: '自动更新已通过环境变量关闭' });
+        } else {
+          setUpdateCheckState({ status: 'error', message: result?.message || '检查失败' });
+        }
+        return;
+      }
+      if (result.hasUpdate) {
+        setUpdateCheckState({ status: 'available', latestVersion: result.latestVersion });
+      } else {
+        setUpdateCheckState({ status: 'latest', latestVersion: result.latestVersion || result.currentVersion });
+      }
+    } catch (err: any) {
+      setUpdateCheckState({ status: 'error', message: err?.message || String(err) });
+    }
+  };
   const [customApiBaseUrl, setCustomApiBaseUrl] = useState(localStorage.getItem('CUSTOM_BASE_URL') || DEFAULT_CUSTOM_BASE_URL);
   const [customApiKey, setCustomApiKey] = useState(localStorage.getItem('CUSTOM_API_KEY') || '');
   const [officialApiKey, setOfficialApiKey] = useState(localStorage.getItem('ANTHROPIC_API_KEY') || '');
@@ -2354,6 +2386,52 @@ const SettingsPage = ({ onClose }: SettingsPageProps) => {
               </div>
               <div className="mt-4 rounded-xl border border-[#2E7CF6]/18 bg-[#2E7CF6]/8 px-4 py-3 text-[12px] leading-6 text-claude-textSecondary">
                 说明：`默认打开目标` 会影响聊天页右上角“打开工作区”的行为；`集成终端 Shell` 会影响 Code 模式命令面板使用的默认解释器。
+              </div>
+            </SectionCard>
+
+            <SectionCard title="关于与更新" subtitle="自动检查 GitHub 上是否有新发行版；下载完成会在侧边栏底部提示重启。">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="flex flex-col gap-0.5">
+                  <div className="text-[13px] text-claude-text">当前版本</div>
+                  <div className="font-mono text-[13px] text-claude-textSecondary">{appVersion ? `v${appVersion}` : '—'}</div>
+                </div>
+                <div className="flex items-center gap-3">
+                  {updateCheckState.status === 'checking' && (
+                    <span className="text-[12px] text-claude-textSecondary">检查中…</span>
+                  )}
+                  {updateCheckState.status === 'latest' && (
+                    <span className="text-[12px] text-[#7BD88F]">已经是最新版本</span>
+                  )}
+                  {updateCheckState.status === 'available' && (
+                    <span className="text-[12px] text-[#2E7CF6]">
+                      发现新版本 v{updateCheckState.latestVersion} — 正在后台下载，完成后侧边栏会提示重启。
+                    </span>
+                  )}
+                  {updateCheckState.status === 'error' && (
+                    <span className="text-[12px] text-[#C6613F]">{updateCheckState.message}</span>
+                  )}
+                  <button
+                    onClick={runUpdateCheck}
+                    disabled={updateCheckState.status === 'checking'}
+                    className="rounded-lg border border-claude-border px-3 py-2 text-[12px] text-claude-text hover:bg-claude-hover disabled:cursor-not-allowed disabled:opacity-45"
+                  >
+                    检查更新
+                  </button>
+                  <button
+                    onClick={() => {
+                      const api = (window as any).electronAPI;
+                      const url = 'https://github.com/qiangweihewu/claude-desktop-cn/releases';
+                      if (api?.openExternal) api.openExternal(url);
+                      else window.open(url, '_blank');
+                    }}
+                    className="rounded-lg border border-[#2E7CF6]/25 px-3 py-2 text-[12px] text-[#2E7CF6] hover:bg-[#2E7CF6]/10"
+                  >
+                    历史版本
+                  </button>
+                </div>
+              </div>
+              <div className="mt-3 rounded-xl border border-claude-border bg-claude-bg px-4 py-3 text-[12px] leading-6 text-claude-textSecondary">
+                启动后 15 秒自动检查一次，之后每 10 分钟一次。后台下载完毕会在侧边栏底部出现「立即重启」按钮。如果不想自动更新，启动时设环境变量 <code className="rounded bg-claude-input/80 px-1 py-0.5">CLAUDE_DESKTOP_DISABLE_AUTO_UPDATE=1</code> 可关闭。
               </div>
             </SectionCard>
 

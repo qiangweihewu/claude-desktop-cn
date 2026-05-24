@@ -1,7 +1,7 @@
 {
   "name": "claude-desktop",
   "private": true,
-  "version": "1.6.51",
+  "version": "1.6.52",
   "description": "Claude Desktop - AI assistant with native capabilities",
   "author": {
     "name": "Qiao-920",
@@ -100,7 +100,7 @@
     ],
     "publish": {
       "provider": "github",
-      "owner": "Qiao-920",
+      "owner": "qiangweihewu",
       "repo": "claude-desktop-cn"
     },
     "win": {

@@ -462,13 +462,14 @@ app.whenReady().then(() => {
     // No SDK subprocess needed 鈥?using direct API calls
     enableNodeModeForChildProcesses();
 
-    // Auto-update is disabled in this local Chinese build.
-    // The upstream app checks for updates frequently and may replace local changes.
-    if (!isDev && process.env.CLAUDE_DESKTOP_ENABLE_AUTO_UPDATE === '1') {
-        autoUpdater.setFeedURL({
-            provider: 'generic',
-            url: 'https://clawparrot.com/updates',
-        });
+    // Auto-update: pulls from this repo's GitHub releases.
+    // The feed URL is auto-discovered from electron-builder's `publish`
+    // config (package.json:build.publish — provider=github,
+    // owner=qiangweihewu, repo=claude-desktop-cn). Don't call
+    // setFeedURL() here — that would override the publish target and
+    // pin us to a stale URL when the repo moves.
+    // Opt out by setting CLAUDE_DESKTOP_DISABLE_AUTO_UPDATE=1.
+    if (!isDev && process.env.CLAUDE_DESKTOP_DISABLE_AUTO_UPDATE !== '1') {
         autoUpdater.autoDownload = true;
         autoUpdater.autoInstallOnAppQuit = true;
         autoUpdater.logger = console;
@@ -552,6 +553,24 @@ ipcMain.handle('install-update', () => {
         autoUpdater.quitAndInstall(true, true);
     }
 });
+// Manual check trigger for a "check for updates" button.
+ipcMain.handle('check-for-updates', async () => {
+    if (process.env.CLAUDE_DESKTOP_DISABLE_AUTO_UPDATE === '1') {
+        return { ok: false, reason: 'disabled', currentVersion: app.getVersion() };
+    }
+    try {
+        const result = await autoUpdater.checkForUpdates();
+        return {
+            ok: true,
+            currentVersion: app.getVersion(),
+            latestVersion: result?.updateInfo?.version || null,
+            hasUpdate: !!(result?.updateInfo && result.updateInfo.version && result.updateInfo.version !== app.getVersion()),
+        };
+    } catch (err) {
+        return { ok: false, reason: 'error', message: err?.message || String(err), currentVersion: app.getVersion() };
+    }
+});
+ipcMain.handle('get-app-version', () => app.getVersion());
 ipcMain.handle('open-external', (_, url) => { const { shell } = require('electron'); shell.openExternal(url); });
 ipcMain.handle('resize-window', (_, width, height) => {
     if (mainWindow) {

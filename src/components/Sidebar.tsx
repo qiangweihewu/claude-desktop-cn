@@ -1059,7 +1059,7 @@ const Sidebar = ({ isCollapsed, toggleSidebar, refreshTrigger, onNewChatClick, o
                 </svg>
                 <div className="flex-1 min-w-0">
                   <div className="text-[12px] text-claude-textSecondary leading-tight">
-                    Downloading update...{updateStatus.percent != null ? ` ${updateStatus.percent}%` : ''}
+                    {isZh ? '下载更新中…' : 'Downloading update…'}{updateStatus.percent != null ? ` ${updateStatus.percent}%` : ''}
                   </div>
                   {updateStatus.percent != null && (
                     <div className="mt-1.5 h-[3px] rounded-full bg-claude-border overflow-hidden">
@@ -1077,14 +1077,18 @@ const Sidebar = ({ isCollapsed, toggleSidebar, refreshTrigger, onNewChatClick, o
                     <polyline points="7 10 12 15 17 10" />
                     <line x1="12" y1="15" x2="12" y2="3" />
                   </svg>
-                  <div className="text-[13px] text-claude-text font-medium leading-tight">Updated to {updateStatus.version}</div>
+                  <div className="text-[13px] text-claude-text font-medium leading-tight">
+                    {isZh ? `已下载 v${updateStatus.version}` : `Updated to ${updateStatus.version}`}
+                  </div>
                 </div>
-                <div className="text-[11.5px] text-claude-textSecondary mb-2.5 ml-6">Relaunch to apply</div>
+                <div className="text-[11.5px] text-claude-textSecondary mb-2.5 ml-6">
+                  {isZh ? '重启应用即可生效' : 'Relaunch to apply'}
+                </div>
                 <button
                   onClick={() => { const api = (window as any).electronAPI; api?.installUpdate?.(); }}
                   className="w-full px-3 py-1.5 rounded-md bg-claude-bg border border-claude-border text-[13px] text-claude-text font-medium hover:bg-claude-btnHover transition-colors"
                 >
-                  Relaunch
+                  {isZh ? '立即重启' : 'Relaunch'}
                 </button>
               </div>
             )}
