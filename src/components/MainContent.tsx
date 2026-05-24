@@ -1480,7 +1480,11 @@ const MainContent = ({ onNewChat, resetKey, tunerConfig, onOpenDocument, onArtif
 
   const isModelSelectable = useCallback((modelString: string) => {
     const base = stripThinking(modelString);
-    const pool = modelCatalog?.all || displayCommonModels;
+    // modelCatalog.all is [] (truthy!) when /user/models 404s on this fork's
+    // bridge-server, which made every model unselectable and silently broke
+    // the picker. Treat an empty array the same as missing and fall through
+    // to displayCommonModels (which has the hardcoded Opus/Sonnet/Haiku).
+    const pool = (modelCatalog?.all?.length ? modelCatalog.all : displayCommonModels);
     const found = pool.find(m => m.id === base);
     return !!found && Number(found.enabled) === 1;
   }, [modelCatalog, displayCommonModels]);
@@ -1492,7 +1496,8 @@ const MainContent = ({ onNewChat, resetKey, tunerConfig, onOpenDocument, onArtif
     const saved = savedIsInvalidForMode ? 'claude-sonnet-4-6' : rawSaved;
     const thinking = isThinkingModel(saved);
     const base = stripThinking(saved);
-    const all = modelCatalog?.all || displayCommonModels;
+    // Same empty-array trap as isModelSelectable: treat [] as missing.
+    const all = (modelCatalog?.all?.length ? modelCatalog.all : displayCommonModels);
     const preferred = all.find(m => m.id === base);
     if (preferred && Number(preferred.enabled) === 1) {
       return withThinking(base, thinking);

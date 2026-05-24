@@ -2507,7 +2507,14 @@ const SettingsPage = ({ onClose }: SettingsPageProps) => {
       case 'models':
         return (
           <div className="space-y-5">
-            <SectionCard title="模型" subtitle="这里保留自定义兼容 API 的模型配置页，作为原生骨架里的模型入口。">
+            <SectionCard title="模型" subtitle="把中转站后面的模型映射到 Opus / Sonnet / Haiku 三个档位 —— 聊天里的模型下拉框就是用这三个档位。">
+              <div className="mb-4 rounded-xl border border-[#2E7CF6]/25 bg-[#2E7CF6]/[0.06] px-4 py-3 text-[12px] leading-6 text-claude-textSecondary">
+                和「API 配置」是两件事，不冲突：
+                <ul className="mt-1.5 ml-4 list-disc space-y-0.5">
+                  <li><span className="text-claude-text">API 配置</span>：决定调用哪个端点（官方 / 自定义兼容），管 Base URL 和 Key。</li>
+                  <li><span className="text-claude-text">模型</span>：仅自定义兼容模式下出现，决定下拉框里 Opus / Sonnet / Haiku 各对应中转站的哪个具体模型 ID。不填则发送默认的 <code>claude-sonnet-4-6</code> 等原生 ID。</li>
+                </ul>
+              </div>
               <ProviderSettings />
             </SectionCard>
           </div>
