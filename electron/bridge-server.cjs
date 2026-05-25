@@ -2016,8 +2016,34 @@ if __name__ == "__main__":
     const http = require('http');
     let proxyPort = 0;
 
-    // Stored per-request: the proxy reads these to know where to forward
-    let proxyTarget = { apiKey: '', baseUrl: '', model: '', format: 'anthropic' };
+    // Per-conversation proxy targets, keyed by convId. Engine spawns with
+    // ANTHROPIC_BASE_URL=http://127.0.0.1:<port>/c/<convId>/v1, so each
+    // inbound proxy request carries its own conv ID in the path — the proxy
+    // looks up the target here instead of reading a shared global. Two
+    // wins:
+    //   (a) Mutating proxyTargets.get(convId).model is now a zero-cost
+    //       hot model switch — no engine respawn needed.
+    //   (b) Concurrent conversations no longer race on a single global
+    //       proxyTarget (each request reads its own entry).
+    const proxyTargets = new Map();
+    function setProxyTarget(convId, target) {
+        if (!convId) return;
+        proxyTargets.set(convId, target);
+    }
+    function getProxyTarget(convId) {
+        return convId ? proxyTargets.get(convId) : null;
+    }
+    function clearProxyTarget(convId) {
+        if (convId) proxyTargets.delete(convId);
+    }
+    // Extract convId from a proxy URL of the form /c/<convId>/v1/... .
+    // Returns { convId, rewrittenUrl } so the handler still sees a normal
+    // /v1/messages path downstream.
+    function parseProxyUrl(url) {
+        const m = url.match(/^\/c\/([^/]+)(\/.*)$/);
+        if (m) return { convId: m[1], rewrittenUrl: m[2] };
+        return { convId: '', rewrittenUrl: url };
+    }
 
     // Pending image blocks to inject into the next API request (per-conversation)
     // The chat handler stores base64 images here; the proxy injects them into the user message
@@ -2025,13 +2051,29 @@ if __name__ == "__main__":
     const emptyToolCallLoops = new Map(); // conversationId -> { count, toolName, updatedAt } // conversationId 鈫?[{ type: 'image', source: { type: 'base64', media_type, data } }]
 
     const proxyServer = http.createServer(async (req, res) => {
+        // Parse `/c/<convId>` prefix so we know which target to forward to.
+        // Rewrite req.url to the original /v1/... path the rest of the
+        // handler expects.
+        const { convId: pathConvId, rewrittenUrl } = parseProxyUrl(req.url);
+        if (pathConvId) req.url = rewrittenUrl;
+
         if (req.method === 'POST' && req.url.includes('/messages')) {
             let body = '';
             req.on('data', c => body += c);
             req.on('end', async () => {
                 try {
                     const anthropicReq = JSON.parse(body);
-                    const target = proxyTarget;
+                    const target = getProxyTarget(pathConvId);
+                    if (!target) {
+                        console.warn('[Proxy] No target for convId', pathConvId, '— rejecting request');
+                        res.writeHead(503, { 'Content-Type': 'application/json' });
+                        res.end(JSON.stringify({ type: 'error', error: { type: 'proxy_error', message: 'proxy target missing for conv ' + pathConvId } }));
+                        return;
+                    }
+                    // Hot model swap: whatever the engine baked in at spawn,
+                    // the source of truth for the API call's model field is
+                    // the proxy target (updated on model picker change).
+                    if (target.model) anthropicReq.model = target.model;
                     const proxyReqId = 'proxy_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 7);
                     console.log('[Proxy] Request start',
                         '| id=', proxyReqId,
@@ -2538,10 +2580,21 @@ if __name__ == "__main__":
                         writeProxyEvent('message_stop', { type: 'message_stop' });
                         res.end();
                     } else {
-                        // Anthropic format 鈥?passthrough to real endpoint
+                        // Anthropic format — passthrough to real endpoint.
+                        // anthropicReq already has its .model field rewritten
+                        // to the current target (the hot-swap point), so we
+                        // re-serialize instead of forwarding the original
+                        // `body` bytes.
                         let endpoint = normalizeBaseUrl(target.baseUrl);
                         if (!endpoint.endsWith('/v1')) endpoint += '/v1';
                         endpoint += '/messages';
+
+                        const rewrittenBody = JSON.stringify(anthropicReq);
+                        console.log('[Proxy] Anthropic passthrough',
+                            '| id=', proxyReqId,
+                            '| conv=', target.conversationId || pathConvId || '',
+                            '| model=', anthropicReq.model || '',
+                            '| msgCount=', Array.isArray(anthropicReq.messages) ? anthropicReq.messages.length : 0);
 
                         const upstreamRes = await fetch(endpoint, {
                             method: 'POST',
@@ -2550,7 +2603,7 @@ if __name__ == "__main__":
                                 'x-api-key': target.apiKey,
                                 'anthropic-version': '2023-06-01',
                             },
-                            body: body,
+                            body: rewrittenBody,
                         });
                         res.writeHead(upstreamRes.status, Object.fromEntries(upstreamRes.headers.entries()));
                         const reader = upstreamRes.body.getReader();
@@ -2578,13 +2631,67 @@ if __name__ == "__main__":
                 }
             });
         } else {
-            res.writeHead(404);
-            res.end('Not found');
+            // All other engine→upstream traffic (e.g.
+            // /v1/messages/count_tokens, /v1/models): generic passthrough.
+            // Required now that every engine, not just OpenAI ones, is
+            // routed through the proxy. We don't rewrite the model field
+            // here — none of these endpoints take one in a body we'd
+            // mutate, and a non-streaming request is just bytes in, bytes
+            // out.
+            const target = getProxyTarget(pathConvId);
+            if (!target) {
+                res.writeHead(503, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ type: 'error', error: { type: 'proxy_error', message: 'proxy target missing' } }));
+                return;
+            }
+            try {
+                let endpoint = normalizeBaseUrl(target.baseUrl);
+                if (!endpoint.endsWith('/v1')) endpoint += '/v1';
+                // req.url is something like /v1/messages/count_tokens at
+                // this point — drop the leading /v1 so we don't double it.
+                const tail = req.url.replace(/^\/v1/, '');
+                endpoint += tail;
+                const chunks = [];
+                req.on('data', c => chunks.push(c));
+                req.on('end', async () => {
+                    try {
+                        const reqBody = chunks.length ? Buffer.concat(chunks) : undefined;
+                        const headers = {};
+                        if (target.format === 'openai') {
+                            headers['authorization'] = 'Bearer ' + target.apiKey;
+                        } else {
+                            headers['x-api-key'] = target.apiKey;
+                            headers['anthropic-version'] = '2023-06-01';
+                        }
+                        if (reqBody) headers['Content-Type'] = req.headers['content-type'] || 'application/json';
+                        const upstreamRes = await fetch(endpoint, { method: req.method, headers, body: reqBody });
+                        res.writeHead(upstreamRes.status, Object.fromEntries(upstreamRes.headers.entries()));
+                        const reader = upstreamRes.body && upstreamRes.body.getReader ? upstreamRes.body.getReader() : null;
+                        if (!reader) { res.end(); return; }
+                        while (true) {
+                            const { done, value } = await reader.read();
+                            if (done) { res.end(); break; }
+                            res.write(value);
+                        }
+                    } catch (err) {
+                        console.error('[Proxy] Passthrough error:', err.message);
+                        if (!res.headersSent) {
+                            res.writeHead(502, { 'Content-Type': 'application/json' });
+                            res.end(JSON.stringify({ type: 'error', error: { type: 'proxy_error', message: err.message } }));
+                        } else {
+                            try { res.end(); } catch (_) {}
+                        }
+                    }
+                });
+            } catch (err) {
+                res.writeHead(500, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ type: 'error', error: { type: 'proxy_error', message: err.message } }));
+            }
         }
     });
     proxyServer.listen(0, '127.0.0.1', () => {
         proxyPort = proxyServer.address().port;
-        console.log('[Proxy] OpenAI conversion proxy on port', proxyPort);
+        console.log('[Proxy] Engine proxy on port', proxyPort);
     });
 
     async function generateTitleAsync(conversationId, userMsg, assistantMsg, token, baseUrl, activeModel, apiFormat) {
@@ -7985,6 +8092,7 @@ You have the following skills available. When a user's request matches a skill's
         try { eng.child.kill(); } catch (_) {}
         enginePool.delete(convId);
         activeChildren.delete(convId);
+        clearProxyTarget(convId);
     }
     function evictOldestEngine() {
         if (enginePool.size < MAX_ENGINE_POOL_SIZE) return;
@@ -8367,12 +8475,33 @@ You have the following skills available. When a user's request matches a skill's
         if (!envVars.CLAUDE_CODE_FILE_READ_MAX_OUTPUT_TOKENS) {
             envVars.CLAUDE_CODE_FILE_READ_MAX_OUTPUT_TOKENS = '80000';
         }
-        if (apiFormat === 'openai' && proxyPort > 0) {
-            proxyTarget = { apiKey, baseUrl, model: modelId, format: 'openai', conversationId: convId, supportsWebSearch: config.supportsWebSearch === true, webSearchStrategy: config.webSearchStrategy || null };
-            envVars.ANTHROPIC_API_KEY = 'proxy-key'; envVars.ANTHROPIC_BASE_URL = 'http://127.0.0.1:' + proxyPort + '/v1';
+        // Route every engine through the local proxy. The proxy reads
+        // proxyTargets.get(convId) on each request, so changing the user's
+        // model selection becomes a Map mutation — no engine respawn.
+        // The /c/<convId>/v1 prefix carries the conv ID in the URL path so
+        // concurrent engines don't collide on a shared global.
+        if (proxyPort > 0) {
+            setProxyTarget(convId, {
+                apiKey, baseUrl,
+                model: modelId,
+                format: apiFormat,
+                conversationId: convId,
+                supportsWebSearch: config.supportsWebSearch === true,
+                webSearchStrategy: config.webSearchStrategy || null,
+            });
+            envVars.ANTHROPIC_API_KEY = 'proxy-key';
+            envVars.ANTHROPIC_BASE_URL = 'http://127.0.0.1:' + proxyPort + '/c/' + convId + '/v1';
+            // Warm DNS + TCP to the real upstream so the proxy's first
+            // outbound request doesn't pay the handshake cost.
             try { const warmUrl = new URL(normalizeBaseUrl(baseUrl)); require('dns').resolve4(warmUrl.hostname, () => {}); fetch(warmUrl.origin, { method: 'HEAD', signal: AbortSignal.timeout(5000) }).catch(() => {}); } catch (_) {}
-            console.log('[EnginePool] OpenAI proxy, model=' + modelId);
-        } else { if (apiKey) envVars.ANTHROPIC_API_KEY = apiKey; envVars.ANTHROPIC_BASE_URL = normalizeBaseUrl(baseUrl || engineEnvVars.ANTHROPIC_BASE_URL || 'https://api.anthropic.com'); }
+            console.log('[EnginePool] Engine via proxy, format=' + apiFormat + ' model=' + modelId);
+        } else {
+            // Fallback if proxy didn't start (defensive — proxy.listen runs
+            // during initServer so this branch is effectively unreachable in
+            // practice; kept so a misconfigured dev environment still works).
+            if (apiKey) envVars.ANTHROPIC_API_KEY = apiKey;
+            envVars.ANTHROPIC_BASE_URL = normalizeBaseUrl(baseUrl || engineEnvVars.ANTHROPIC_BASE_URL || 'https://api.anthropic.com');
+        }
         console.log('[EnginePool] Spawning persistent engine, conv=' + convId + ' model=' + modelId + ' session=' + (conv.claude_session_id || 'new'));
         const { spawn } = require('child_process');
         const spawnedAt = Date.now();
@@ -8450,7 +8579,7 @@ You have the following skills available. When a user's request matches a skill's
                 }
                 finishTurn(engine, convId, conv);
             }
-            enginePool.delete(convId); activeChildren.delete(convId);
+            enginePool.delete(convId); activeChildren.delete(convId); clearProxyTarget(convId);
         });
         child.on('error', (err) => {
             console.error('[EnginePool] Error:', err.message);
@@ -8459,7 +8588,7 @@ You have the following skills available. When a user's request matches a skill's
                 if (engine.turn.sendSSE) engine.turn.sendSSE({ type: 'error', error: err.message || 'Engine error' });
                 finishTurn(engine, convId, conv);
             }
-            enginePool.delete(convId); activeChildren.delete(convId);
+            enginePool.delete(convId); activeChildren.delete(convId); clearProxyTarget(convId);
         });
         child.on('spawn', () => {
             console.log('[EnginePool] Child spawned', '| conv=', convId, '| pid=', child.pid, '| model=', modelId);
@@ -8682,18 +8811,18 @@ You have the following skills available. When a user's request matches a skill's
             const config = resolveChatConfig(conv, user_mode, env_token, env_base_url);
             let engine = enginePool.get(conversation_id);
             console.log('[Chat] Engine lookup for', conversation_id, '| existing=', summarizeEngine(engine), '| requestedModel=', config.modelId);
-            // Engine reuse: must match on every dimension that's baked into the spawn
-            // env at startup. modelId / apiKey / baseUrl / apiFormat are all hardcoded
-            // into the child process's environment vars and CANNOT be changed without
-            // a respawn. If the user switches user_mode (clawparrot ↔ selfhosted) or
-            // changes provider config, the resolved config differs from the running
-            // engine — kill it so the next spawn uses the new endpoint/credentials.
+            // Engine reuse: must match on every dimension that's baked into
+            // the spawn env at startup. The proxy now decouples the model
+            // field from spawn — model.id changes are a free Map mutation —
+            // so a model swap no longer triggers respawn. Anything else that
+            // affects HTTP credentials, request format, or sysprompt-time
+            // user_profile injection still requires a fresh subprocess.
             const apiKeyChanged = !!engine && engine.apiKey !== config.apiKey;
             const baseUrlChanged = !!engine && engine.baseUrl !== config.baseUrl;
             const apiFormatChanged = !!engine && engine.apiFormat !== config.apiFormat;
             const userProfileKey = JSON.stringify(user_profile || {});
             const userProfileChanged = !!engine && engine.userProfileKey !== userProfileKey;
-            if (engine && (!isEngineAlive(engine) || engine.modelId !== config.modelId || engine.needsRestart || apiKeyChanged || baseUrlChanged || apiFormatChanged || userProfileChanged)) {
+            if (engine && (!isEngineAlive(engine) || engine.needsRestart || apiKeyChanged || baseUrlChanged || apiFormatChanged || userProfileChanged)) {
                 killEngine(conversation_id, 'chat_existing_engine_invalid_or_stale', {
                     isAlive: !!isEngineAlive(engine),
                     currentModel: engine && engine.modelId,
@@ -8753,8 +8882,26 @@ You have the following skills available. When a user's request matches a skill's
             engine.state = 'processing';
             engine.lastUsed = Date.now();
             console.log('[Chat] Turn starting', '| conv=', conversation_id, '| engine=', summarizeEngine(engine), '| promptLen=', finalPrompt.length);
-            if (config.apiFormat === 'openai' && proxyPort > 0) {
-                proxyTarget = { apiKey: config.apiKey, baseUrl: config.baseUrl, model: config.modelId, format: 'openai', conversationId: conversation_id, supportsWebSearch: config.supportsWebSearch === true, webSearchStrategy: config.webSearchStrategy || null };
+            // Refresh the proxy target on every turn — the user may have
+            // toggled the model picker, thinking flag, or anything else since
+            // the last turn. Picking a different model is now free: we just
+            // overwrite the Map entry; the engine subprocess is untouched.
+            if (proxyPort > 0) {
+                setProxyTarget(conversation_id, {
+                    apiKey: config.apiKey,
+                    baseUrl: config.baseUrl,
+                    model: config.modelId,
+                    format: config.apiFormat,
+                    conversationId: conversation_id,
+                    supportsWebSearch: config.supportsWebSearch === true,
+                    webSearchStrategy: config.webSearchStrategy || null,
+                });
+                // Engine's displayed modelId reflects what we'll actually
+                // send upstream. Keeps logs / pool summaries honest.
+                if (engine && engine.modelId !== config.modelId) {
+                    console.log('[EnginePool] Hot model swap, conv=', conversation_id, 'old=', engine.modelId, 'new=', config.modelId);
+                    engine.modelId = config.modelId;
+                }
             }
             engine.turn = {
                 sendSSE, assistantText: '', thinkingText: '',
