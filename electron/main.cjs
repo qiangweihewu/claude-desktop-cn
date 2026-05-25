@@ -463,13 +463,23 @@ app.whenReady().then(() => {
     enableNodeModeForChildProcesses();
 
     // Auto-update: pulls from this repo's GitHub releases.
-    // The feed URL is auto-discovered from electron-builder's `publish`
-    // config (package.json:build.publish — provider=github,
-    // owner=qiangweihewu, repo=claude-desktop-cn). Don't call
-    // setFeedURL() here — that would override the publish target and
-    // pin us to a stale URL when the repo moves.
+    // electron-updater reads its config from process.resourcesPath/app-update.yml,
+    // which is shipped via build.extraResources (electron/app-update.yml). We also
+    // call setFeedURL() explicitly below as belt-and-suspenders — if anything
+    // strips or corrupts the yaml in the bundle (it has happened: a two-step
+    // electron-builder CI flow can silently skip the file), the explicit call
+    // still lets the updater find a feed instead of ENOENTing.
     // Opt out by setting CLAUDE_DESKTOP_DISABLE_AUTO_UPDATE=1.
     if (!isDev && process.env.CLAUDE_DESKTOP_DISABLE_AUTO_UPDATE !== '1') {
+        try {
+            autoUpdater.setFeedURL({
+                provider: 'github',
+                owner: 'qiangweihewu',
+                repo: 'claude-desktop-cn',
+            });
+        } catch (err) {
+            console.error('[Update] setFeedURL failed:', err.message);
+        }
         autoUpdater.autoDownload = true;
         autoUpdater.autoInstallOnAppQuit = true;
         autoUpdater.logger = console;

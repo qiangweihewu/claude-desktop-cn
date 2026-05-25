@@ -1,0 +1,18 @@
+# Read at runtime by electron-updater (looked up via process.resourcesPath/app-update.yml).
+# Without this file the updater ENOENTs on every checkForUpdates() and never reaches
+# GitHub — so even with the publish config in package.json and latest-mac.yml on the
+# release, the app has no idea where to look.
+#
+# Why this file is checked in (rather than auto-generated): our CI builds macOS in two
+# stages — `electron-builder --mac dir` (no installer target → app-update.yml is NOT
+# written; see app-builder-lib PublishManager.js:77 darwin target guard) followed by
+# `electron-builder --mac dmg zip --prepackaged` (no pack phase, onAfterPack doesn't
+# fire). Shipping it via extraResources sidesteps that two-step build pattern.
+#
+# Keep these fields in sync with package.json:build.publish. updaterCacheDirName is
+# the per-app subdirectory under ~/Library/Application Support/Caches/ where partial
+# downloads are stored; matches productName lowercased + "-updater" by convention.
+provider: github
+owner: qiangweihewu
+repo: claude-desktop-cn
+updaterCacheDirName: claude-desktop-cn-updater

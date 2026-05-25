@@ -1050,7 +1050,7 @@ const Sidebar = ({ isCollapsed, toggleSidebar, refreshTrigger, onNewChatClick, o
         </div>
 
         {/* Update status banner */}
-        {updateStatus && !isCollapsed && (updateStatus.type === 'available' || updateStatus.type === 'progress' || updateStatus.type === 'downloaded') && (
+        {updateStatus && !isCollapsed && (updateStatus.type === 'available' || updateStatus.type === 'progress' || updateStatus.type === 'downloaded' || updateStatus.type === 'error') && (
           <div className="mx-3 mb-2 mt-auto">
             {(updateStatus.type === 'available' || updateStatus.type === 'progress') && (
               <div className="flex items-center gap-2.5 px-3 py-2.5 rounded-lg bg-claude-hover">
@@ -1092,12 +1092,29 @@ const Sidebar = ({ isCollapsed, toggleSidebar, refreshTrigger, onNewChatClick, o
                 </button>
               </div>
             )}
+            {updateStatus.type === 'error' && (
+              <div className="flex items-start gap-2.5 px-3 py-2.5 rounded-lg bg-[#C6613F]/10 border border-[#C6613F]/25">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-[#C6613F] flex-shrink-0 mt-0.5">
+                  <circle cx="12" cy="12" r="10" />
+                  <line x1="12" y1="8" x2="12" y2="12" />
+                  <line x1="12" y1="16" x2="12.01" y2="16" />
+                </svg>
+                <div className="flex-1 min-w-0">
+                  <div className="text-[12px] text-[#C6613F] font-medium leading-tight mb-0.5">
+                    {isZh ? '更新检查失败' : 'Update check failed'}
+                  </div>
+                  <div className="text-[11px] text-claude-textSecondary leading-relaxed break-all">
+                    {(updateStatus as any).message || (isZh ? '未知错误' : 'Unknown error')}
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         )}
 
         {/* User Profile Footer */}
         <div
-          className={`${!updateStatus || isCollapsed || (updateStatus.type !== 'available' && updateStatus.type !== 'progress' && updateStatus.type !== 'downloaded') ? 'mt-auto' : ''} border-t border-claude-border flex-shrink-0 relative transition-all duration-200`}
+          className={`${!updateStatus || isCollapsed || (updateStatus.type !== 'available' && updateStatus.type !== 'progress' && updateStatus.type !== 'downloaded' && updateStatus.type !== 'error') ? 'mt-auto' : ''} border-t border-claude-border flex-shrink-0 relative transition-all duration-200`}
           style={{
             paddingTop: `${tunerConfig?.profilePy || 12}px`,
             paddingBottom: `${tunerConfig?.profilePy || 12}px`,
