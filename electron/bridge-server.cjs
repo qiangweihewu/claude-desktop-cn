@@ -8181,45 +8181,52 @@ You have the following skills available. When a user's request matches a skill's
         return { modelId, provider, apiKey, baseUrl, apiFormat, supportsWebSearch, webSearchStrategy };
     }
 
-    // Pre-flight ping to upstream so gateway errors (price/auth/model) surface
-    // before we pay the cost of spawning a fresh engine subprocess. Only meant
-    // to be called when no live engine exists for the conversation.
-    // Returns { ok: true } on 2xx, { ok: false, status, message } on hard
-    // failure, or { ok: true } on ambiguous network noise (let engine retry).
-    async function probeUpstream(config) {
-        const { baseUrl, apiKey, apiFormat, modelId } = config;
-        if (!baseUrl || !apiKey) return { ok: true };
-        let endpoint = normalizeBaseUrl(baseUrl);
-        if (!endpoint.endsWith('/v1')) endpoint += '/v1';
-        const isOpenAI = apiFormat === 'openai';
-        endpoint += isOpenAI ? '/chat/completions' : '/messages';
-        const headers = isOpenAI
-            ? { 'content-type': 'application/json', 'authorization': 'Bearer ' + apiKey }
-            : { 'content-type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' };
-        const body = { model: modelId, max_tokens: 1, messages: [{ role: 'user', content: 'ping' }] };
+    // Pre-flight upstream probe. Runs THROUGH the local proxy so it exercises
+    // the same code path as a real chat request — same format conversion,
+    // same auth header injection, same URL rewrite. If the proxy or upstream
+    // rejects the probe, the real chat would also fail, so we can surface
+    // the error early and kill the freshly-spawned engine.
+    //
+    // Must be called AFTER spawnPersistentEngine (which calls setProxyTarget),
+    // so the proxy Map has the correct target for this convId.
+    async function probeViaProxy(convId) {
+        if (proxyPort <= 0) return { ok: true };
+        const target = getProxyTarget(convId);
+        if (!target || !target.baseUrl) return { ok: true };
+        const endpoint = 'http://127.0.0.1:' + proxyPort + '/c/' + convId + '/v1/messages';
+        const body = { model: target.model || 'claude-sonnet-4-6', max_tokens: 1, messages: [{ role: 'user', content: 'ping' }] };
         try {
             const res = await fetch(endpoint, {
                 method: 'POST',
-                headers,
+                headers: {
+                    'Content-Type': 'application/json',
+                    'x-api-key': 'proxy-key',
+                    'anthropic-version': '2023-06-01',
+                },
                 body: JSON.stringify(body),
-                signal: AbortSignal.timeout(4000),
+                signal: AbortSignal.timeout(5000),
             });
             if (res.ok) return { ok: true };
             const errText = await res.text().catch(() => '');
+            let parsed = '';
+            try { parsed = JSON.parse(errText); } catch (_) { parsed = errText; }
+            const errMsg = (parsed && typeof parsed === 'object' && parsed.error && parsed.error.message)
+                ? parsed.error.message
+                : (typeof parsed === 'string' ? parsed.slice(0, 400) : JSON.stringify(parsed).slice(0, 400));
             return {
                 ok: false,
                 status: res.status,
-                message: 'API Error: ' + res.status + ' ' + errText.slice(0, 400) + ' [endpoint: ' + endpoint + ']',
+                message: 'API Error: ' + res.status + ' ' + errMsg,
             };
         } catch (err) {
             const msg = (err && err.message) ? err.message : String(err);
             if (err && (err.name === 'TimeoutError' || /timeout/i.test(msg))) {
-                return { ok: false, status: 0, message: 'Upstream probe timeout (' + endpoint + ')' };
+                return { ok: false, status: 0, message: 'Upstream probe timeout' };
             }
             if (/ECONNREFUSED|ENOTFOUND|EAI_AGAIN|ECONNRESET/.test(msg)) {
-                return { ok: false, status: 0, message: 'Cannot reach upstream: ' + msg + ' [endpoint: ' + endpoint + ']' };
+                return { ok: false, status: 0, message: 'Cannot reach upstream: ' + msg };
             }
-            console.warn('[Chat] Pre-flight probe non-fatal error, proceeding:', msg);
+            console.warn('[Chat] Probe via proxy non-fatal error, proceeding:', msg);
             return { ok: true };
         }
     }
@@ -8837,18 +8844,25 @@ You have the following skills available. When a user's request matches a skill's
             }
             if (!engine) {
                 // Spawn the engine immediately. The upstream-error probe runs
-                // in parallel: an `await probeUpstream` here used to add 1-2s
-                // to every cold first-message because it issued a full
-                // (1-token) inference call before we even spawned Bun. Now we
-                // do them concurrently and let whichever finishes first drive
-                // the outcome — engine spawn typically wins on healthy
-                // gateways (~0.4s), probe wins on misconfigured gateways
-                // (~1.5s with a clear error), so the user gets the best of
-                // both: fast happy path, fast error path.
+                // in parallel: a serial `await` here used to add 1-2s to
+                // every cold first-message because it issued a full (1-token)
+                // inference call before we even spawned Bun.
+                //
+                // The probe now runs through the local proxy
+                // (`http://127.0.0.1:<port>/c/<convId>/v1/messages`) instead
+                // of fetching upstream directly. spawnPersistentEngine
+                // populates the proxy target before returning, so by the
+                // time we kick off the probe the proxy can look up the
+                // correct apiKey / baseUrl / format and do the same body
+                // conversion the real chat would. Result: if the probe
+                // fails, the real chat would have failed too — no more
+                // false-positive 401s where the direct-fetch probe used a
+                // different auth scheme or body schema than the proxy
+                // would have used.
                 const sysPrompt = buildChatSystemPrompt(conv, user_mode, user_profile);
                 engine = spawnPersistentEngine(conversation_id, conv, { ...config, sysPrompt, userProfileKey });
                 const engineAtSpawn = engine;
-                probeUpstream(config).then((probe) => {
+                probeViaProxy(conversation_id).then((probe) => {
                     if (probe.ok) return;
                     if (enginePool.get(conversation_id) !== engineAtSpawn) return; // engine already replaced/killed
                     console.warn('[Chat] Async probe failed — killing engine and surfacing error',
