@@ -3794,6 +3794,79 @@ if __name__ == "__main__":
         res.json({ ok: true });
     });
     // Get all available models across all enabled providers
+    // Dynamic model list — fetches upstream's /v1/models and caches it so the
+    // picker auto-discovers new Anthropic releases (Opus 5 etc.) instead of
+    // shipping a stale hardcoded list. Falls back to a hardcoded set if the
+    // upstream doesn't expose /v1/models (some relays don't).
+    const userModelsCache = { at: 0, key: '', data: null };
+    const USER_MODELS_TTL_MS = 60 * 60 * 1000; // 1h
+    const FALLBACK_USER_MODELS = {
+        all: [
+            { id: 'claude-opus-4-6', name: 'Opus 4.6', enabled: 1, tier: 'opus', description: 'Most capable for ambitious work' },
+            { id: 'claude-sonnet-4-6', name: 'Sonnet 4.6', enabled: 1, tier: 'sonnet', description: 'Most efficient for everyday tasks' },
+            { id: 'claude-haiku-4-5-20251001', name: 'Haiku 4.5', enabled: 1, tier: 'haiku', description: 'Fastest for quick answers' },
+        ],
+        common: [],
+        fallback_model: 'claude-sonnet-4-6',
+    };
+    FALLBACK_USER_MODELS.common = FALLBACK_USER_MODELS.all.slice();
+    function deriveModelTier(id) {
+        const s = String(id || '').toLowerCase();
+        if (s.includes('opus')) return 'opus';
+        if (s.includes('sonnet')) return 'sonnet';
+        if (s.includes('haiku')) return 'haiku';
+        return 'extra';
+    }
+    function prettifyModelId(id) {
+        return String(id || '').replace(/^claude-/i, 'Claude ').replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+    }
+    server.get('/api/user/models', async (req, res) => {
+        const apiKey = engineEnvVars.ANTHROPIC_API_KEY || process.env.ANTHROPIC_API_KEY || '';
+        const baseUrl = engineEnvVars.ANTHROPIC_BASE_URL || process.env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com';
+        const cacheKey = apiKey + '|' + baseUrl;
+        const now = Date.now();
+        if (userModelsCache.data && userModelsCache.key === cacheKey && (now - userModelsCache.at) < USER_MODELS_TTL_MS) {
+            return res.json(userModelsCache.data);
+        }
+        if (!apiKey) return res.json(FALLBACK_USER_MODELS);
+        try {
+            let endpoint = normalizeBaseUrl(baseUrl);
+            if (!endpoint.endsWith('/v1')) endpoint += '/v1';
+            endpoint += '/models';
+            const upstream = await fetch(endpoint, {
+                method: 'GET',
+                headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
+                signal: AbortSignal.timeout(5000),
+            });
+            if (!upstream.ok) {
+                console.warn('[Models] /v1/models returned', upstream.status, '- using fallback');
+                return res.json(FALLBACK_USER_MODELS);
+            }
+            const payload = await upstream.json();
+            const items = Array.isArray(payload?.data) ? payload.data : [];
+            const all = items.map(m => ({
+                id: m.id,
+                name: m.display_name || prettifyModelId(m.id),
+                enabled: 1,
+                tier: deriveModelTier(m.id),
+            })).filter(m => m.id);
+            if (all.length === 0) return res.json(FALLBACK_USER_MODELS);
+            // common = newest opus/sonnet/haiku (assume upstream returns sorted; otherwise first match wins)
+            const tierOrder = ['opus', 'sonnet', 'haiku'];
+            const common = tierOrder.map(t => all.find(m => m.tier === t)).filter(Boolean);
+            const fallback_model = (common.find(m => m.tier === 'sonnet') || common[0] || all[0]).id;
+            const data = { all, common: common.length ? common : all.slice(0, 3), fallback_model };
+            userModelsCache.at = now;
+            userModelsCache.key = cacheKey;
+            userModelsCache.data = data;
+            console.log('[Models] Cached', all.length, 'models from upstream, common=', common.map(m => m.id).join(','));
+            res.json(data);
+        } catch (err) {
+            console.warn('[Models] upstream /v1/models failed:', err.message, '- using fallback');
+            res.json(FALLBACK_USER_MODELS);
+        }
+    });
+
     server.get('/api/providers/models', (req, res) => {
         const models = [];
         for (const p of providers) {
